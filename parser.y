@@ -46,6 +46,9 @@ extern void printRelocationTables();
 
 //flink table functions:
 extern void processFlinkTable();
+
+//Elf function
+extern void createELF();
 %}
 
 %union {
@@ -169,9 +172,10 @@ instruction: HALT { printf("HALT\n"); instruction_halt_int_iret_ret("halt");}
 end_statement: END { 
     printf("END\n");
     printSymbolTable();
-    printFlinkTable();
+    //printFlinkTable();
     processFlinkTable();
     printRelocationTables();
+    createELF();
     YYACCEPT; //This macro will make the parser immediately accept the input and stop further parsing
 };
 

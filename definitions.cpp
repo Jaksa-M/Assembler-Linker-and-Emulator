@@ -5,6 +5,7 @@
 #include <string>
 #include <cstring>
 #include <iomanip>
+#include <elf.h>
 
 std::vector<std::string> symbol_list;
 
@@ -177,7 +178,7 @@ bool symbolTableInitialized = false;
 // Function to initialize the symbol table with the initial entry
 void initializeSymbolTable() {
   if (symbolTableInitialized == false) {
-    SymbolTableEntry initialEntry(0, "NOTYP", "LOC", -1, "", "defined");
+    SymbolTableEntry initialEntry(0, "NOTYP", "LOC", 0, "", "defined");
     symbolTable.push_back(initialEntry);
     symbolTableInitialized = true;
   }
@@ -582,7 +583,7 @@ extern "C" void directive_extern(){
   for(int i = 0; i < symbol_list.size(); i++){
     SymbolTableEntry* entry = symbolExist(symbol_list[i]);
     if(entry == nullptr){
-      addSymbolToSymTable(0, "NOTYP", "GLOB", -1, symbol_list[i], "undefined");
+      addSymbolToSymTable(0, "NOTYP", "GLOB", 0, symbol_list[i], "undefined");
     }
   }
 }
@@ -593,6 +594,7 @@ extern "C" void directive_section(char* name){
     addSymbolToSymTable(0, "SCTN", "LOC", SECTION_INDEX++, std::string(name), "defined");
     CURR_SECTION_INDEX = SECTION_INDEX-1;
     sectionLocationCounter[CURR_SECTION_INDEX] = 0; // Initialize the location counter for the new section
+    relocationTables[CURR_SECTION_INDEX];
   }
   else{
     CURR_SECTION_INDEX = entry->section_index;
@@ -671,4 +673,298 @@ extern "C" void processFlinkTable(){
       }
     }
   }
+}
+
+//-----------------------------------------------------------------------------------------
+//ELF FORMAT
+std::map<std::string, size_t> sizes;
+std::string strtab;
+
+void createElfHeader(char* elfFile) {
+    Elf64_Ehdr ehdr;
+    memset(&ehdr, 0, sizeof(ehdr));
+
+    // ELF Header
+    ehdr.e_ident[0] = ELFMAG0;
+    ehdr.e_ident[1] = ELFMAG1;
+    ehdr.e_ident[2] = ELFMAG2;
+    ehdr.e_ident[3] = ELFMAG3;
+    ehdr.e_ident[4] = ELFCLASS64;     // 64-bit architecture
+    ehdr.e_ident[5] = ELFDATA2LSB;    // Little-endian
+    ehdr.e_ident[6] = EV_CURRENT;     // ELF version
+    ehdr.e_ident[7] = ELFOSABI_NONE;
+    ehdr.e_type = ET_REL;             // Relocatable file
+    ehdr.e_machine = EM_X86_64;       // Machine architecture
+    ehdr.e_version = EV_CURRENT;      // ELF version
+    ehdr.e_entry = 0;                 // Entry point (not used in relocatable files)
+    ehdr.e_phoff = 0;                 // Program header table offset
+    ehdr.e_shoff = sizeof(Elf64_Ehdr); // Section header table offset (after ELF header)
+    ehdr.e_flags = 0;                 // Processor-specific flags
+    ehdr.e_ehsize = sizeof(Elf64_Ehdr); // ELF header size
+    ehdr.e_phentsize = 0;             // Size of program header entry
+    ehdr.e_phnum = 0;                 // Number of program header entries
+    ehdr.e_shentsize = sizeof(Elf64_Shdr); // Size of section header entry
+    ehdr.e_shnum = 4 + 2*relocationTables.size(); // Number of section headers
+    ehdr.e_shstrndx = 1;      // Section header string table index
+
+    memcpy(elfFile, &ehdr, sizeof(ehdr));
+}
+void printShstrtab(const std::string& shstrtab) {
+    for (size_t i = 0; i < shstrtab.size(); ++i) {
+        unsigned char ch = static_cast<unsigned char>(shstrtab[i]);
+        if (ch == '\0') {
+            std::cout << "\\0";  // Print a visible representation for null characters
+        } else if (std::isprint(ch)) {
+            std::cout << ch;     // Print printable characters
+        } else {
+            std::cout << "\\x" << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(ch);
+        }
+    }
+    std::cout << std::endl;
+}
+void createSectionHeaders(char* elfFile) {
+    Elf64_Shdr shdr[sizes["headerSections"] / sizeof(Elf64_Shdr)];
+    memset(shdr, 0, sizeof(shdr));
+    int i = 0;
+
+    //calculating offsets and filling names for shstrtab
+    std::string shstrtab;
+    shstrtab.append("\0", 1);
+    size_t offset_shstrtab = shstrtab.size();
+    shstrtab.append(".shstrtab\0", 10);
+    size_t offset_symtab = shstrtab.size();
+    shstrtab.append(".symtab\0", 8);
+    size_t offset_strtab = shstrtab.size();
+    shstrtab.append(".strtab\0", 8);
+    std::vector<size_t> offsets_sections;
+    std::vector<size_t> offsets_relocations;
+    for(int j = 0; j < symbolTable.size(); j++){
+      if(symbolTable[j].type  == "SCTN"){
+        offsets_sections.push_back(shstrtab.size());
+        shstrtab.append(symbolTable[j].name.c_str(), symbolTable[j].name.size() + 1);
+
+        offsets_relocations.push_back(shstrtab.size());
+        shstrtab.append(".rela",5);
+        shstrtab.append(symbolTable[j].name.c_str(), symbolTable[j].name.size() + 1);
+      }
+    }
+    
+    //inserting 0th section
+    shdr[i].sh_name = 0;
+    shdr[i].sh_type = SHT_NULL;
+    shdr[i].sh_flags = 0;
+    shdr[i].sh_addr = 0;
+    shdr[i].sh_offset = 0;
+    shdr[i].sh_size = 0;
+    shdr[i].sh_link = 0;
+    shdr[i].sh_info = 0;
+    shdr[i].sh_addralign = 0;
+    shdr[i++].sh_entsize = 0;
+  
+    //inserting shstrtab
+    shdr[i].sh_name = offset_shstrtab;
+    shdr[i].sh_type = SHT_STRTAB;
+    shdr[i].sh_flags = 0;
+    shdr[i].sh_addr = 0;
+    shdr[i].sh_offset = sizeof(Elf64_Ehdr) + sizes["headerSections"];
+    shdr[i].sh_size = shstrtab.size();
+    shdr[i].sh_link = 0;
+    shdr[i].sh_info = 0;
+    shdr[i].sh_addralign = 0;
+    shdr[i++].sh_entsize = 0;
+
+    //inserting sections
+    size_t offset1 = sizes["shstrtab"];
+    int counter = 0;
+    for(int j = 0; j < symbolTable.size(); j++){
+      if(symbolTable[j].type  == "SCTN"){
+        shdr[i].sh_name = offsets_sections[counter++];
+        shdr[i].sh_type = SHT_PROGBITS;
+        shdr[i].sh_flags = 0;
+        shdr[i].sh_addr = 0;
+        shdr[i].sh_offset = sizeof(Elf64_Ehdr) + sizes["headerSections"] + offset1;
+        shdr[i].sh_size = memoryMap[symbolTable[j].section_index].size();
+        offset1 += shdr[i].sh_size; // adding size of added section to the offset
+        shdr[i].sh_link = 0;
+        shdr[i].sh_info = 0;
+        shdr[i].sh_addralign = 0;
+        shdr[i++].sh_entsize = 0;
+      }
+    }
+    //inserting relocation sections
+    size_t offset2 = 0;
+    for(int j = 0; j < relocationTables.size(); j++){
+      shdr[i].sh_name = offsets_relocations[j];
+      shdr[i].sh_type = SHT_RELA;
+      shdr[i].sh_flags = 0;
+      shdr[i].sh_addr = 0;
+      shdr[i].sh_offset = sizeof(Elf64_Ehdr) + sizes["headerSections"] + offset1 + offset2;
+      shdr[i].sh_size = relocationTables[j+1].size() * sizeof(Elf64_Rela); // Size of relocation table
+      offset2 += shdr[i].sh_size;
+      shdr[i].sh_link = i + relocationTables.size() - j; //connection with symbol table
+      shdr[i].sh_info = i - relocationTables.size();
+      shdr[i].sh_addralign = 8;
+      shdr[i++].sh_entsize = sizeof(Elf64_Rela);
+    }
+    
+    // Section Header for .symtab
+    shdr[i].sh_name = offset_symtab;  // Index to section header string table (assuming it's at offset 0)
+    shdr[i].sh_type = SHT_SYMTAB;
+    shdr[i].sh_flags = 0;
+    shdr[i].sh_addr = 0;
+    shdr[i].sh_offset = sizeof(Elf64_Ehdr) + sizes["headerSections"] + offset1 + offset2;
+    shdr[i].sh_size = symbolTable.size() * sizeof(Elf64_Sym); // Size of symbol table
+    shdr[i].sh_link = i+1;  // Index of section header string table
+    shdr[i].sh_info = symbolTable.size();
+    shdr[i].sh_addralign = 8;
+    shdr[i++].sh_entsize = sizeof(Elf64_Sym);
+    
+    // Section Header for .strtab
+    shdr[i].sh_name = offset_strtab;
+    shdr[i].sh_type = SHT_STRTAB;
+    shdr[i].sh_flags = 0;
+    shdr[i].sh_addr = 0;
+    shdr[i].sh_offset = sizeof(Elf64_Ehdr) + sizes["headerSections"] + offset1 + offset2 + shdr[i-1].sh_size;
+    shdr[i].sh_size = strtab.size();  // all the names length from symbol table added together
+    shdr[i].sh_link = 0;  // No link section
+    shdr[i].sh_info = 0;  // No info
+    shdr[i].sh_addralign = 0;
+    shdr[i++].sh_entsize = 0;
+
+    memcpy(elfFile + sizeof(Elf64_Ehdr), shdr, sizeof(shdr));
+    memcpy(elfFile + sizeof(Elf64_Ehdr) + sizes["headerSections"], shstrtab.c_str(), shstrtab.size());
+    memcpy(elfFile + sizeof(Elf64_Ehdr) + sizes["headerSections"] + sizes["sectionData"] + sizes["shstrtab"] 
+            + sizes["relocationTable"] + sizes["symbolTable"], strtab.c_str(), strtab.size());
+}
+
+int getBind(SymbolTableEntry entry){
+  if(entry.bind == "LOC") return STB_LOCAL;
+  else if(entry.bind == "GLOB") return STB_GLOBAL;
+  return -1; //ERROR
+}
+
+int getType(SymbolTableEntry entry){
+  if(entry.type == "NOTYP") return STT_NOTYPE;
+  else if(entry.type == "SCTN") return STT_SECTION; 
+  return -1; //ERROR
+}
+
+void serializeSectionData(char* elfFile){
+  size_t offset = sizeof(Elf64_Ehdr) + sizes["headerSections"] + sizes["shstrtab"];
+  size_t sectionOffset = offset;
+  for(int i = 1; i < memoryMap.size() + 1; i++){
+    const std::vector<uint8_t>& sectionData = memoryMap[i];
+    memcpy(elfFile + sectionOffset, sectionData.data(), sectionData.size());
+    sectionOffset += memoryMap[i].size();
+  }
+}
+
+void serializeRelocationTable(char* elfFile) {
+  size_t offset = sizeof(Elf64_Ehdr) + sizes["headerSections"] + sizes["shstrtab"] + sizes["sectionData"];
+  
+  // Calculate total size needed for all relocation tables
+  size_t totalSize = 0;
+  std::vector<size_t> tableOffsets;
+  for (int i = 1; i < relocationTables.size() + 1; i++) {
+    tableOffsets.push_back(totalSize);
+    totalSize += relocationTables[i].size() * sizeof(Elf64_Rela); 
+  }
+  
+  // Write all relocation tables to ELF file
+  for (size_t i = 0; i < tableOffsets.size(); i++) {
+    const std::vector<RelocationEntry>& entries = relocationTables[i+1];
+    Elf64_Rela* rela = reinterpret_cast<Elf64_Rela*>(elfFile + offset + tableOffsets[i]);
+    
+    for (size_t j = 0; j < entries.size(); j++) {
+      const RelocationEntry& entry = entries[j];
+      rela[j].r_offset = entry.offset;
+      rela[j].r_info = ELF64_R_INFO(entry.symbol, R_X86_64_32S);
+      rela[j].r_addend = entry.addend;
+    }
+  }
+}
+
+void serializeSymbolTable(char* elfFile, std::vector<int> strtab_offsets) {
+  size_t offset = sizeof(Elf64_Ehdr) + sizes["headerSections"] + sizes["shstrtab"] + sizes["sectionData"] + sizes["relocationTable"];
+  Elf64_Sym* symtab = reinterpret_cast<Elf64_Sym*>(elfFile + offset);
+  
+  for (size_t i = 0; i < symbolTable.size(); ++i) {
+    const SymbolTableEntry& entry = symbolTable[i];
+    symtab[i].st_name = strtab_offsets[i]; // Index into string table
+    symtab[i].st_info = ELF64_ST_INFO(getBind(entry), getType(entry));
+    symtab[i].st_other = STV_DEFAULT;
+    symtab[i].st_shndx = entry.section_index;
+    symtab[i].st_value = entry.value;
+    symtab[i].st_size = 0; // Size of the symbol (set to 0 for now, linker will set it later)
+  }
+}
+
+extern "C" void createELF() {
+  sizes["symbolTable"] = symbolTable.size() * sizeof(Elf64_Sym);
+  sizes["headerSections"] = (4 + 2 * relocationTables.size()) * sizeof(Elf64_Shdr);
+
+  size_t relocationTablesSize = 0;
+  for (int i = 1; i < relocationTables.size() + 1; i++) {
+    relocationTablesSize += relocationTables[i].size() * sizeof(Elf64_Rela);
+  }
+  sizes["relocationTable"] = relocationTablesSize;
+
+  std::vector<int> strtab_offsets;
+  strtab.append("\0",1);
+  for(int j = 0; j < symbolTable.size(); j++){
+    strtab_offsets.push_back(strtab.size());
+    strtab.append(symbolTable[j].name.c_str(), symbolTable[j].name.size() +1);
+  }
+  sizes["strtab"] = strtab.size();
+
+  size_t sectionDatasize = 0;
+  for(int i = 1; i < memoryMap.size() + 1; i++){
+    sectionDatasize += memoryMap[i].size();
+  }
+  sizes["sectionData"] = sectionDatasize;
+
+  std::string shstrtab;
+  shstrtab.append("\0", 1);
+  shstrtab.append(".shstrtab\0", 10);
+  shstrtab.append(".symtab\0", 8);
+  shstrtab.append(".strtab\0", 8);
+  for(int j = 0; j < symbolTable.size(); j++){
+    if(symbolTable[j].type  == "SCTN"){
+      shstrtab.append(symbolTable[j].name.c_str(), symbolTable[j].name.size() + 1);
+      shstrtab.append(".rela",5);
+      shstrtab.append(symbolTable[j].name.c_str(), symbolTable[j].name.size() + 1);
+    }
+  }
+  sizes["shstrtab"] = shstrtab.size();
+
+  size_t fileSize = sizeof(Elf64_Ehdr) + 
+                    sizes["headerSections"] +
+                    sizes["sectionData"] +
+                    sizes["shstrtab"] +
+                    sizes["relocationTable"] +
+                    sizes["symbolTable"] +
+                    sizes["strtab"];
+
+  char* elfFile = new char[fileSize];
+  memset(elfFile, 0, fileSize);
+
+  createElfHeader(elfFile);
+  std::cout<<"createElfHeader"<<std::endl;
+  createSectionHeaders(elfFile);
+  std::cout<<"createSectionHeaders"<<std::endl;
+  serializeSectionData(elfFile);
+  std::cout<<"serializeSectionData"<<std::endl;
+  serializeRelocationTable(elfFile);
+  std::cout<<"serializeRelocationTable"<<std::endl;
+  serializeSymbolTable(elfFile, strtab_offsets);
+  std::cout<<"serializeSymbolTable"<<std::endl;
+
+  // Write to file
+  FILE* file = fopen("elfoutput.o", "wb");
+  if (file) {
+    fwrite(elfFile, 1, fileSize, file);
+    fclose(file);
+  }
+
+  delete[] elfFile;
 }
