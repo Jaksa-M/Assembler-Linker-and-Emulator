@@ -251,6 +251,23 @@ bool isDefined(std::string symbol){ // if symbol exists in symbol table and is d
   }
 }
 
+extern "C" void printMemoryMap() {
+  std::cout << "Memory Map:" << std::endl;
+  for (auto it = memoryMap.begin(); it != memoryMap.end(); ++it) {
+    int address = it->first;
+    const std::vector<uint8_t>& data = it->second;
+    std::cout << "Address: 0x" << std::hex << std::setw(4) << std::setfill('0') << address << std::dec << std::endl;
+    std::cout << "Data: ";
+    for (size_t i = 0; i < data.size(); ++i) {
+      std::cout << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(data[i]) << ' ';
+      if ((i + 1) % 16 == 0) {
+          std::cout << std::endl << "      ";
+      }
+    }
+    std::cout << std::dec << std::endl;
+  }
+}
+
 void insert_to_memory(uint8_t addr1, uint8_t addr2, uint8_t addr3, uint8_t addr4, uint8_t addr5, uint8_t addr6, uint8_t addr7, uint8_t addr8){
   uint8_t combined1 = (addr1 << 4) | (addr2 & 0x0F);
   uint8_t combined2 = (addr3 << 4) | (addr4 & 0x0F);
@@ -646,6 +663,10 @@ extern "C" void process_label(char* label){
     changeValFlinkTableEntry(CURR_SECTION_INDEX, label, sectionLocationCounter[CURR_SECTION_INDEX]); //we change symbol value of correspodning symbol in flink table 
   }
   else{
+    if(entry->bind == "LOC" || (entry->bind == "GLOB" && entry->defined == "defined")){ // check if that symbol already exists (either LOC or GLOB) in symbol table
+      std::cout<<"ERROR: Multiple symbol definitions inside 1 file, symbol name: "<<entry->name<<std::endl;
+      exit(-2); //ERROR
+    }
     entry->section_index = CURR_SECTION_INDEX;
     entry->value = sectionLocationCounter[CURR_SECTION_INDEX];
     entry->defined = "defined";
@@ -793,6 +814,7 @@ void createSectionHeaders(char* elfFile) {
     }
     //inserting relocation sections
     size_t offset2 = 0;
+    std::cout<<"Rela table size: "<<relocationTables.size()<<std::endl;
     for(int j = 0; j < relocationTables.size(); j++){
       shdr[i].sh_name = offsets_relocations[j];
       shdr[i].sh_type = SHT_RELA;
@@ -960,7 +982,7 @@ extern "C" void createELF() {
   std::cout<<"serializeSymbolTable"<<std::endl;
 
   // Write to file
-  FILE* file = fopen("elfoutput.o", "wb");
+  FILE* file = fopen("elfoutput2.o", "wb");
   if (file) {
     fwrite(elfFile, 1, fileSize, file);
     fclose(file);

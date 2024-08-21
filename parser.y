@@ -49,6 +49,7 @@ extern void processFlinkTable();
 
 //Elf function
 extern void createELF();
+extern void printMemoryMap();
 %}
 
 %union {
@@ -175,6 +176,7 @@ end_statement: END {
     //printFlinkTable();
     processFlinkTable();
     printRelocationTables();
+    printMemoryMap();
     createELF();
     YYACCEPT; //This macro will make the parser immediately accept the input and stop further parsing
 };
