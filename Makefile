@@ -21,3 +21,13 @@ clean_linker:
 
 clean_build_run_linker: clean_linker linker_
 	./linker -hex -o mem_content.hex -place=code2@0x4000F000 -place=code@0x40000000 elfoutput1.o elfoutput2.o
+
+
+emulator_:
+	gcc -g -o emulator emulator.cpp -lstdc++
+
+clean_emulator:
+	rm -f emulator
+
+clean_build_run_emulator: clean_emulator emulator_
+	./emulator mem_content.hex

@@ -4,7 +4,9 @@
 #include <set>
 #include <string>
 #include <cstring>
+#include <algorithm>
 #include <iomanip>
+#include <fstream>
 #include <elf.h>
 
 struct RelocationEntry {
@@ -18,20 +20,6 @@ struct RelocationEntry {
 };
 std::map<std::string, std::map<int, std::vector<RelocationEntry>>> filesRelocationTables; // key is name of the input file
 std::map<std::string, std::vector<std::string>> relocationTablesNames; // key is file name, value is vector of section names for that file
-
-void printRelocationTablesNames() {
-    for (const auto& pair : relocationTablesNames) {
-        const std::string& fileName = pair.first;
-        const std::vector<std::string>& sectionNames = pair.second;
-        
-        std::cout << "File: " << fileName << "\n";
-        std::cout << "Sections:\n";
-        for (const auto& sectionName : sectionNames) {
-            std::cout << "  - " << sectionName << "\n";
-        }
-        std::cout << std::endl;
-    }
-}
 
 struct SymbolTableEntry {
   static int currentNum;
@@ -51,36 +39,6 @@ std::map<std::string, std::vector<SymbolTableEntry>> symbolTables; // key is nam
 
 std::map<std::string, std::map<std::string, std::vector<uint8_t>>> filesSectionsMemory; // Map that holds sections data (like memory from assembler)
 
-
-extern "C" void printSymbolTable(std::vector<SymbolTableEntry> symbolTable) {
-  // Print the headers
-  std::cout << std::setfill(' ') << std::setw(5) << "NUM" << std::setw(10) << "VALUE" << std::setw(10) << "TYPE"
-            << std::setw(10) << "BIND" << std::setw(15) << "SECTION INDEX" << std::setw(20) << "NAME" << std::endl;
-  std::cout << std::string(85, '-') << std::endl;
-
-  // Print each entry in the symbol table
-  for (const auto& entry : symbolTable) {
-      std::cout << std::setw(5) << entry.num << std::setw(10) << entry.value << std::setw(10) << entry.type
-                << std::setw(10) << entry.bind << std::setw(15) << entry.section_index << std::setw(20) << entry.name << std::setw(15)
-                << std::endl;
-  }
-}
-
-extern "C" void printRelocationTables(std::map<int, std::vector<RelocationEntry>> relocationTables) {
-  for (const auto& section : relocationTables) {
-    std::cout << "\nSECTION: " << section.first << std::endl;
-    std::cout << std::setw(10) << "OFFSET" 
-            << std::setw(15) << "TYPE" << std::setw(20) << "SYMBOL" 
-            << std::setw(10) << "ADDEND" << std::endl;
-    std::cout << std::string(60, '-') << std::endl;
-
-    for (const auto& entry : section.second) {
-      std::cout << std::setw(10) << entry.offset
-                << std::setw(15) << entry.type << std::setw(20) << entry.symbol
-                << std::setw(10) << entry.addend << std::endl;
-    }
-  }
-}
 
 void readELF(std::vector<std::string> inputFiles){
     for(int i = 0; i < inputFiles.size(); i++){
@@ -251,52 +209,105 @@ struct MemorySection {
     int address; // Starting address of the section
 };
 
-std::map<std::string, MemorySection> memoryMap; // Memory map, keyed by section name
+std::map<std::string, MemorySection> memoryMap; // key is section name
 std::map<std::string, std::map<std::string, int>> fileSectionStartAddresses; // Map to store the starting address of each section for each input file
 // key is section name, value is its starting address (differs from the map above because this tracks only beggining addresses of each section)
 std::map<std::string, int> startAddressEachSection; 
 std::map<std::string, SymbolTableEntry> unifiedSymbolTable; // Unified symbol table
 
-// Function to add a section to memory
+// void addSectionToMemory(const std::string& name, const std::vector<uint8_t>& data, const LinkerOptions& options, std::string fileName) {
+//     int address = 0;
+//     if (memoryMap.find(name) != memoryMap.end()) { // If section already exists, append data
+//         auto& section = memoryMap[name];
+//         section.data.insert(section.data.end(), data.begin(), data.end());
+
+//         // Check if the updated section data extends beyond its original end
+//         int oldEndAddress = section.address + section.data.size() - data.size();
+//         if (section.address + section.data.size() > oldEndAddress) {
+//             std::vector<std::string> sectionsToUpdate;
+//             for (const auto& entry : memoryMap) {
+//                 if (entry.second.address >= oldEndAddress && entry.first != name) {
+//                     sectionsToUpdate.push_back(entry.first);
+//                 }
+//             }
+//             for (const auto& sectionName : sectionsToUpdate) {
+//                 auto& section = memoryMap[sectionName];
+//                 section.address += data.size(); //this may have to be changed, not + data.size(), maybe less???
+//             }
+//         }
+//     } else {
+//         // Check if the section has a placement specified via -place argument
+//         if (options.isRelocatable == false && options.sectionPlacements.find(name) != options.sectionPlacements.end()) {
+//             address = std::stoi(options.sectionPlacements.at(name), nullptr, 16); // Convert the placement address from string to int
+//             //std::cout<<"Section: "<<name<<", address: "<<std::hex<<address<<std::endl;
+//         } else {
+//             // If no placement is specified, place it at the end of memory
+//             if (memoryMap.empty()) {
+//                 address = 0x0000;
+//                 //address = 0x0100; // Start at 0x0100 if no sections are present (fix this)
+//             } else {
+//                 const auto& lastSection = memoryMap.rbegin()->second;
+//                 address = lastSection.address + lastSection.data.size();
+//             }
+//         }
+//         memoryMap[name] = {name, data, address}; // Insert the new section into memory
+//         std::cout<<"name: "<<name<<", address: "<<std::hex<<address<<std::endl;
+//     }
+// }
+
 void addSectionToMemory(const std::string& name, const std::vector<uint8_t>& data, const LinkerOptions& options, std::string fileName) {
     int address = 0;
-    if (memoryMap.find(name) != memoryMap.end()) { // If section already exists, append data
+
+    // Process sections specified by -place first, but only if it isn't yet in memory
+    if (options.sectionPlacements.find(name) != options.sectionPlacements.end() && memoryMap.find(name) == memoryMap.end()) {
+        address = std::stoi(options.sectionPlacements.at(name), nullptr, 16); // Convert the placement address from string to int
+
+        // Check for overlaps with existing placed sections
+        for (const auto& entry : memoryMap) {
+            const auto& section = entry.second;
+            if (section.address <= address && address < section.address + section.data.size()) {
+                std::cerr << "Error: Section " << name << " overlaps with section " << section.name << " at address " << std::hex << address << std::endl;
+                exit(-3); //ERROR
+            }
+        }
+        std::cout<<"Name: "<<name<<", address: "<<std::hex<<address<<std::endl;
+    }
+    else if(options.sectionPlacements.find(name) == options.sectionPlacements.end()) {
+        // If no placement is specified, place it after the highest section address end
+        if (memoryMap.empty() == false) {
+            const auto& lastSection = std::max_element(memoryMap.begin(), memoryMap.end(),
+                [](const auto& a, const auto& b) {
+                    return (a.second.address + a.second.data.size()) < (b.second.address + b.second.data.size());
+                })->second;
+            address = lastSection.address + lastSection.data.size();
+        } else {
+            address = 0x0000; // Start at 0x0000 if no sections are present
+        }
+    }
+
+    // If the section already exists, check if it overlaps with any other placed sections
+    if (memoryMap.find(name) != memoryMap.end()) {
         auto& section = memoryMap[name];
         section.data.insert(section.data.end(), data.begin(), data.end());
 
         // Check if the updated section data extends beyond its original end
-        int oldEndAddress = section.address + section.data.size() - data.size();
-        if (section.address + section.data.size() > oldEndAddress) {
-            std::vector<std::string> sectionsToUpdate;
-            for (const auto& entry : memoryMap) {
-                if (entry.second.address >= oldEndAddress && entry.first != name) {
-                    sectionsToUpdate.push_back(entry.first);
+        int newEndAddress = section.address + section.data.size();
+        for (const auto& entry : memoryMap) {
+            if (entry.first != name && entry.second.address >= section.address && entry.second.address < newEndAddress) {
+                if (options.sectionPlacements.find(entry.first) != options.sectionPlacements.end()) {
+                    std::cerr << "Error: Section " << name << " overlaps with placed section " << entry.first << std::endl;
+                    return;
+                } else {
+                    auto& overlappingSection = memoryMap[entry.first];
+                    overlappingSection.address = newEndAddress; // Move the overlapping section
                 }
-            }
-            for (const auto& sectionName : sectionsToUpdate) {
-                auto& section = memoryMap[sectionName];
-                section.address += data.size(); //this may have to be changed, not + data.size(), maybe less???
             }
         }
     } else {
-        // Check if the section has a placement specified via -place argument
-        if (options.isRelocatable == false && options.sectionPlacements.find(name) != options.sectionPlacements.end()) {
-            address = std::stoi(options.sectionPlacements.at(name), nullptr, 16); // Convert the placement address from string to int
-            //std::cout<<"Section: "<<name<<", address: "<<std::hex<<address<<std::endl;
-        } else {
-            // If no placement is specified, place it at the end of memory
-            if (memoryMap.empty()) {
-                address = 0x0000;
-                //address = 0x0100; // Start at 0x0100 if no sections are present (fix this)
-            } else {
-                const auto& lastSection = memoryMap.rbegin()->second;
-                address = lastSection.address + lastSection.data.size();
-            }
-        }
         memoryMap[name] = {name, data, address}; // Insert the new section into memory
-        std::cout<<"name: "<<name<<", address: "<<std::hex<<address<<std::endl;
     }
 }
+
 
 std::string findSection(std::string fileName, int section_index){
     for(int i = 0; i < symbolTables[fileName].size(); i++){
@@ -433,31 +444,16 @@ void resolveRelocationTables(std::vector<std::string> inputFiles){
                         break;
                     }
                 }
-                memoryMap[relocationTablesNames[inputFiles[i]][j-1]].data[entry.offset] = value + entry.addend;
-            }
-        }
-    }
-}
+                int finalValue = value + entry.addend;
 
-// Function to print memory layout by sections
-void printMemoryBySections() {
-    std::cout << "Memory Layout by Sections:\n";
-    for (const auto& section : memoryMap) {
-        std::cout << "Section: " << section.first << "\n";
-        std::cout << "Start Address: 0x" << std::hex << section.second.address << "\n";
-        std::cout << "Data: ";
-        
-        // Print the data in the section
-        for (size_t i = 0; i < section.second.data.size(); ++i) {
-            // Print each byte in hexadecimal, formatted to 2 digits
-            std::cout << std::setw(2) << std::setfill('0') << std::hex << static_cast<int>(section.second.data[i]) << " ";
-            
-            // Break line for every 16 bytes for readability
-            if ((i + 1) % 16 == 0) {
-                std::cout << "\n      "; // Align with "Data: " for better readability
+                // Split the 32-bit finalValue into bytes in little-endian format
+                memoryMap[relocationTablesNames[inputFiles[i]][j-1]].data[entry.offset + 0] = (finalValue >> 0) & 0xFF;
+                memoryMap[relocationTablesNames[inputFiles[i]][j-1]].data[entry.offset + 1] = (finalValue >> 8) & 0xFF;
+                memoryMap[relocationTablesNames[inputFiles[i]][j-1]].data[entry.offset + 2] = (finalValue >> 16) & 0xFF;
+                memoryMap[relocationTablesNames[inputFiles[i]][j-1]].data[entry.offset + 3] = (finalValue >> 24) & 0xFF;
+                //memoryMap[relocationTablesNames[inputFiles[i]][j-1]].data[entry.offset] = value + entry.addend;
             }
         }
-        std::cout << "\n\n";
     }
 }
 
@@ -534,6 +530,110 @@ void mergeSymbolTables(const std::vector<std::string>& inputFiles) {
     }
 }
 
+
+// Function to write the memory map to a hex file
+void writeMemoryToHexFile(std::string fileName) {
+    std::ofstream outFile(fileName);
+    if (!outFile) {
+        std::cerr << "Failed to open file: " << fileName << std::endl;
+        return;
+    }
+
+    std::map<int, uint8_t> addressToData; // key is address, value is data byte
+    for (const auto& pair : memoryMap) {
+        const MemorySection& section = pair.second;
+        int sectionEnd = section.address + section.data.size();
+        for (int i = section.address; i < sectionEnd; ++i) {
+            addressToData[i] = section.data[i - section.address]; // Store the byte at the address
+        }
+    }
+
+    // Write to the file in the desired format
+    auto it = addressToData.begin();
+    while (it != addressToData.end()) {
+        int address = it->first;
+        outFile << std::hex << std::setw(8) << std::setfill('0') << address << ": ";
+
+        // Write up to 8 bytes per line, but only if addresses are consecutive
+        for (int i = 0; i < 8 && it != addressToData.end(); i++) {
+            if (i > 0 && std::prev(it)->first + 1 != it->first) {
+                break; // Stop if the address is not consecutive
+            }
+            outFile << std::setw(2) << std::setfill('0') << static_cast<int>(it->second) << " ";
+            ++it;
+        }
+
+        outFile << std::endl;
+    }
+
+    // Close the file
+    outFile.close();
+}
+
+
+//------------------------------------------------------------------------------------------------
+//PRINTS:
+void printRelocationTablesNames() {
+    for (const auto& pair : relocationTablesNames) {
+        const std::string& fileName = pair.first;
+        const std::vector<std::string>& sectionNames = pair.second;
+        
+        std::cout << "File: " << fileName << "\n";
+        std::cout << "Sections:\n";
+        for (const auto& sectionName : sectionNames) {
+            std::cout << "  - " << sectionName << "\n";
+        }
+        std::cout << std::endl;
+    }
+}
+extern "C" void printSymbolTable(std::vector<SymbolTableEntry> symbolTable) {
+  // Print the headers
+  std::cout << std::setfill(' ') << std::setw(5) << "NUM" << std::setw(10) << "VALUE" << std::setw(10) << "TYPE"
+            << std::setw(10) << "BIND" << std::setw(15) << "SECTION INDEX" << std::setw(20) << "NAME" << std::endl;
+  std::cout << std::string(85, '-') << std::endl;
+
+  // Print each entry in the symbol table
+  for (const auto& entry : symbolTable) {
+      std::cout << std::setw(5) << entry.num << std::setw(10) << entry.value << std::setw(10) << entry.type
+                << std::setw(10) << entry.bind << std::setw(15) << entry.section_index << std::setw(20) << entry.name << std::setw(15)
+                << std::endl;
+  }
+}
+extern "C" void printRelocationTables(std::map<int, std::vector<RelocationEntry>> relocationTables) {
+  for (const auto& section : relocationTables) {
+    std::cout << "\nSECTION: " << section.first << std::endl;
+    std::cout << std::setw(10) << "OFFSET" 
+            << std::setw(15) << "TYPE" << std::setw(20) << "SYMBOL" 
+            << std::setw(10) << "ADDEND" << std::endl;
+    std::cout << std::string(60, '-') << std::endl;
+
+    for (const auto& entry : section.second) {
+      std::cout << std::setw(10) << entry.offset
+                << std::setw(15) << entry.type << std::setw(20) << entry.symbol
+                << std::setw(10) << entry.addend << std::endl;
+    }
+  }
+}
+void printMemoryBySections() {
+    std::cout << "Memory Layout by Sections:\n";
+    for (const auto& section : memoryMap) {
+        std::cout << "Section: " << section.first << "\n";
+        std::cout << "Start Address: 0x" << std::hex << section.second.address << "\n";
+        std::cout << "Data: ";
+        
+        // Print the data in the section
+        for (size_t i = 0; i < section.second.data.size(); ++i) {
+            // Print each byte in hexadecimal, formatted to 2 digits
+            std::cout << std::setw(2) << std::setfill('0') << std::hex << static_cast<int>(section.second.data[i]) << " ";
+            
+            // Break line for every 16 bytes for readability
+            if ((i + 1) % 16 == 0) {
+                std::cout << "\n      "; // Align with "Data: " for better readability
+            }
+        }
+        std::cout << "\n\n";
+    }
+}
 void printUnifiedSymbolTable() {
     // Print header with proper spacing
     std::cout << std::left <<std::setfill(' ')
@@ -558,7 +658,6 @@ void printUnifiedSymbolTable() {
                   << std::endl;
     }
 }
-
 void printSectionStartAddresses() {
     for (const auto& fileEntry : fileSectionStartAddresses) {
         const std::string& fileName = fileEntry.first;
@@ -583,6 +682,9 @@ void mergeRelocationTables(std::vector<std::string> inputFiles){
         }
     }
 }
+
+//----------------------------------------------------------------------------------------------------------------
+//Everything related to creating ELF file:
 
 std::vector<SymbolTableEntry> symbolTable;
 void mapToVectorSymTab(){
@@ -890,13 +992,35 @@ int main(int argc, char* argv[]) {
     // Read the ELF file and populate the symbol table and relocation tables
     readELF(options.inputFiles);
 
-    for (const auto& file : options.inputFiles) {
-        const auto& sections = filesSectionsMemory[file];
-        for (const auto& section : sections) {
-            addSectionToMemory(section.first, section.second, options, file);
+    if(options.isRelocatable == false){
+        // First, add every section with a -place argument to memory
+        for (const auto& file : options.inputFiles) {
+            const auto& sections = filesSectionsMemory[file];
+            for (const auto& section : sections) {
+                if (options.sectionPlacements.find(section.first) != options.sectionPlacements.end()) {
+                    addSectionToMemory(section.first, section.second, options, file);
+                }
+            }
+        }
+        // Then, add every other section to memory
+        for (const auto& file : options.inputFiles) {
+            const auto& sections = filesSectionsMemory[file];
+            for (const auto& section : sections) {
+                if (options.sectionPlacements.find(section.first) == options.sectionPlacements.end()) {
+                    addSectionToMemory(section.first, section.second, options, file);
+                }
+            }
         }
     }
-    
+    else{
+        options.sectionPlacements.clear(); //-place parameter should be ignored
+        for (const auto& file : options.inputFiles) {
+            const auto& sections = filesSectionsMemory[file];
+            for (const auto& section : sections) {
+                addSectionToMemory(section.first, section.second, options, file);
+            }
+        }
+    }
 
     mergeSymbolTables(options.inputFiles);
     setFileSectionStartAddresses(options.inputFiles, options.isRelocatable);
@@ -909,7 +1033,7 @@ int main(int argc, char* argv[]) {
     // }
     
     printMemoryBySections();
-    //printSectionStartAddresses();
+    printSectionStartAddresses();
 
     //printUnifiedSymbolTable();
 
@@ -920,6 +1044,7 @@ int main(int argc, char* argv[]) {
     }
     else if(options.isHex == true){
         resolveRelocationTables(options.inputFiles);
+        writeMemoryToHexFile(options.outputFile);
     }
 
     return 0;

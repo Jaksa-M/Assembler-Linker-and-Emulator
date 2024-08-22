@@ -342,7 +342,7 @@ extern "C" void instruction_add_sub_mul_div_xchg(char* instr, int gprS, int gprD
   } else if (strcmp(instr, "div") == 0) {
     insert_to_memory(5,3,static_cast<uint8_t>(gprD),static_cast<uint8_t>(gprD),static_cast<uint8_t>(gprS),0,0,0);
   } else if (strcmp(instr, "xchg") == 0){
-    insert_to_memory(2,0,0,static_cast<uint8_t>(gprD),static_cast<uint8_t>(gprS),0,0,0);
+    insert_to_memory(4,0,0,static_cast<uint8_t>(gprD),static_cast<uint8_t>(gprS),0,0,0);
   }
 }
 
