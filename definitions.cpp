@@ -273,14 +273,13 @@ void insert_to_memory(uint8_t addr1, uint8_t addr2, uint8_t addr3, uint8_t addr4
   uint8_t combined2 = (addr3 << 4) | (addr4 & 0x0F);
   uint8_t combined3 = (addr5 << 4) | (addr6 & 0x0F);
   uint8_t combined4 = (addr7 << 4) | (addr8 & 0x0F);
-
-  memoryMap[CURR_SECTION_INDEX].push_back(combined1);
-  memoryMap[CURR_SECTION_INDEX].push_back(combined2);
-  memoryMap[CURR_SECTION_INDEX].push_back(combined3);
+  
   memoryMap[CURR_SECTION_INDEX].push_back(combined4);
+  memoryMap[CURR_SECTION_INDEX].push_back(combined3);
+  memoryMap[CURR_SECTION_INDEX].push_back(combined2);
+  memoryMap[CURR_SECTION_INDEX].push_back(combined1);
 
   sectionLocationCounter[CURR_SECTION_INDEX] += 4; // Update the location counter for the current section
-  //std::cout<<"location counter: "<<sectionLocationCounter[CURR_SECTION_INDEX]<<"\n"<<std::endl;
 }
 
 void splitAndInsertLiteralToMem(int literal) {
@@ -496,7 +495,7 @@ extern "C" void instruction_ld_st(char* instr, char* what_op, int gpr, int liter
     if(strcmp(what_op, "symbol") == 0){
       insert_to_memory(9,2,static_cast<uint8_t>(gpr),15,0,0,0,8); // gpr[A] <= mem32[pc+8]
       insert_to_memory(9,2,static_cast<uint8_t>(gpr),static_cast<uint8_t>(gpr),0,0,0,0); // gpr[A] = mem[gprA]
-      insert_to_memory(3,0,15,0,0,0,0,8); // JMP pc+8
+      insert_to_memory(3,0,15,0,0,0,0,4); // JMP pc+4
       if(isDefined(std::string(symbol)) == false){
         addFlinkTableEntry(CURR_SECTION_INDEX, symbol, 0, sectionLocationCounter[CURR_SECTION_INDEX], '+', 0);
       }
@@ -544,7 +543,7 @@ extern "C" void instruction_ld_st(char* instr, char* what_op, int gpr, int liter
     }
   } else if (strcmp(instr, "st") == 0) {
     if(strcmp(what_op, "symbol") == 0){
-      insert_to_memory(8,0,0,0,static_cast<uint8_t>(gpr),0,0,4); // mem[mem[pc+4]] = gprx
+      insert_to_memory(8,2,15,0,static_cast<uint8_t>(gpr),0,0,4); // mem[mem[pc+4]] = gprx
       insert_to_memory(3,0,15,0,0,0,0,4); // JMP pc+4
       if(isDefined(std::string(symbol)) == false){
         addFlinkTableEntry(CURR_SECTION_INDEX, symbol, 0, sectionLocationCounter[CURR_SECTION_INDEX], '+', 0);
@@ -601,6 +600,9 @@ extern "C" void directive_extern(){
     SymbolTableEntry* entry = symbolExist(symbol_list[i]);
     if(entry == nullptr){
       addSymbolToSymTable(0, "NOTYP", "GLOB", 0, symbol_list[i], "undefined");
+    }
+    else{
+      entry->bind = "GLOB"; //nisam siguran dal ovo ovako treba, pogledati jos sta se desava ako prvo bude labela pa tek kasnije naidje extern
     }
   }
 }
@@ -814,7 +816,6 @@ void createSectionHeaders(char* elfFile) {
     }
     //inserting relocation sections
     size_t offset2 = 0;
-    std::cout<<"Rela table size: "<<relocationTables.size()<<std::endl;
     for(int j = 0; j < relocationTables.size(); j++){
       shdr[i].sh_name = offsets_relocations[j];
       shdr[i].sh_type = SHT_RELA;
@@ -853,7 +854,7 @@ void createSectionHeaders(char* elfFile) {
     shdr[i].sh_addralign = 0;
     shdr[i++].sh_entsize = 0;
 
-    memcpy(elfFile + sizeof(Elf64_Ehdr), shdr, sizeof(shdr));
+    memcpy(elfFile + sizeof(Elf64_Ehdr), shdr, sizeof(shdr));    
     memcpy(elfFile + sizeof(Elf64_Ehdr) + sizes["headerSections"], shstrtab.c_str(), shstrtab.size());
     memcpy(elfFile + sizeof(Elf64_Ehdr) + sizes["headerSections"] + sizes["sectionData"] + sizes["shstrtab"] 
             + sizes["relocationTable"] + sizes["symbolTable"], strtab.c_str(), strtab.size());
@@ -921,6 +922,11 @@ void serializeSymbolTable(char* elfFile, std::vector<int> strtab_offsets) {
   }
 }
 
+std::string outputFileName;
+extern "C" void setOutputFileName(char* fileName){
+  outputFileName = std::string(fileName);
+}
+
 extern "C" void createELF() {
   sizes["symbolTable"] = symbolTable.size() * sizeof(Elf64_Sym);
   sizes["headerSections"] = (4 + 2 * relocationTables.size()) * sizeof(Elf64_Shdr);
@@ -982,7 +988,7 @@ extern "C" void createELF() {
   std::cout<<"serializeSymbolTable"<<std::endl;
 
   // Write to file
-  FILE* file = fopen("elfoutput2.o", "wb");
+  FILE* file = fopen(outputFileName.c_str(), "wb");
   if (file) {
     fwrite(elfFile, 1, fileSize, file);
     fclose(file);

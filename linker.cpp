@@ -206,13 +206,13 @@ LinkerOptions parseArguments(int argc, char* argv[]) {
 struct MemorySection {
     std::string name;
     std::vector<uint8_t> data; // The actual data in the section
-    int address; // Starting address of the section
+    uint address; // Starting address of the section
 };
 
 std::map<std::string, MemorySection> memoryMap; // key is section name
-std::map<std::string, std::map<std::string, int>> fileSectionStartAddresses; // Map to store the starting address of each section for each input file
+std::map<std::string, std::map<std::string, uint>> fileSectionStartAddresses; // Map to store the starting address of each section for each input file
 // key is section name, value is its starting address (differs from the map above because this tracks only beggining addresses of each section)
-std::map<std::string, int> startAddressEachSection; 
+std::map<std::string, uint> startAddressEachSection; 
 std::map<std::string, SymbolTableEntry> unifiedSymbolTable; // Unified symbol table
 
 // void addSectionToMemory(const std::string& name, const std::vector<uint8_t>& data, const LinkerOptions& options, std::string fileName) {
@@ -256,11 +256,11 @@ std::map<std::string, SymbolTableEntry> unifiedSymbolTable; // Unified symbol ta
 // }
 
 void addSectionToMemory(const std::string& name, const std::vector<uint8_t>& data, const LinkerOptions& options, std::string fileName) {
-    int address = 0;
+    uint address = 0;
 
     // Process sections specified by -place first, but only if it isn't yet in memory
     if (options.sectionPlacements.find(name) != options.sectionPlacements.end() && memoryMap.find(name) == memoryMap.end()) {
-        address = std::stoi(options.sectionPlacements.at(name), nullptr, 16); // Convert the placement address from string to int
+        address = std::stoul(options.sectionPlacements.at(name), nullptr, 16); // Convert the placement address from string to int
 
         // Check for overlaps with existing placed sections
         for (const auto& entry : memoryMap) {
@@ -270,7 +270,6 @@ void addSectionToMemory(const std::string& name, const std::vector<uint8_t>& dat
                 exit(-3); //ERROR
             }
         }
-        std::cout<<"Name: "<<name<<", address: "<<std::hex<<address<<std::endl;
     }
     else if(options.sectionPlacements.find(name) == options.sectionPlacements.end()) {
         // If no placement is specified, place it after the highest section address end
@@ -284,7 +283,7 @@ void addSectionToMemory(const std::string& name, const std::vector<uint8_t>& dat
             address = 0x0000; // Start at 0x0000 if no sections are present
         }
     }
-
+    
     // If the section already exists, check if it overlaps with any other placed sections
     if (memoryMap.find(name) != memoryMap.end()) {
         auto& section = memoryMap[name];
@@ -359,7 +358,7 @@ void setFileSectionStartAddresses(std::vector<std::string> inputFiles, bool isRe
 
     // changing the symbol offsets, addends and symbol numbers(changing to point to unifiedSymTab, won't be changed in this for loop) in relocation tables
     // note: additional offset is calculated by looking in which section does current relocation table belong
-    //       additional addend is calculated by looking in which section does current symbol belong
+    //       additional addend for SCTNs is calculated by looking in which section does current symbol belong
     for(int i = 0; i < inputFiles.size(); i++){ // iterating through input files
         for(int j = 1; j < filesRelocationTables[inputFiles[i]].size()+1; j++){ // iterating through relocation tables inside one file
             for(int z = 0; z < filesRelocationTables[inputFiles[i]][j].size(); z++){ // iterating through entries inside relocation tables
@@ -376,45 +375,34 @@ void setFileSectionStartAddresses(std::vector<std::string> inputFiles, bool isRe
                     filesRelocationTables[inputFiles[i]][j][z].addend +=
                         fileSectionStartAddresses[inputFiles[i]][section_name] - startAddressEachSection[section_name];
                 }
-                else{ // the symbol inside relocatable table was global (not using SCTN)
-                    int section_index = symbolTables[inputFiles[i]][filesRelocationTables[inputFiles[i]][j][z].symbol].section_index;
+                else{ // the symbol inside relocatable table was global or extern (not using SCTN)
                     std::string section_name = relocationTablesNames[inputFiles[i]][j-1];
-                    if(section_index == 0){ //than we need to go to unified symbol table and find in which section it is (because symbol is extern)
-                        for (const auto& entry : unifiedSymbolTable) {
-                            if(entry.second.name == symbolTables[inputFiles[i]][filesRelocationTables[inputFiles[i]][j][z].symbol].name){
-                                section_index = entry.second.section_index;
-                                for (const auto& entry2 : unifiedSymbolTable){ // looking in which section is that extern symbol
-                                    if(entry2.second.type == "SCTN" && entry2.second.section_index == section_index){
-                                        // filesRelocationTables[inputFiles[i]][j][z].offset += fileSectionStartAddresses[inputFiles[i]][entry2.second.name]
-                                        //     - startAddressEachSection[entry2.second.name];
-                                        filesRelocationTables[inputFiles[i]][j][z].offset += fileSectionStartAddresses[inputFiles[i]][section_name]
-                                            - startAddressEachSection[section_name];
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    else{ // symbol is not extern and we can find it inside symbol table for that file
-                        // std::string section_name = findSection(inputFiles[i], section_index);
-                        // filesRelocationTables[inputFiles[i]][j][z].offset += fileSectionStartAddresses[inputFiles[i]][section_name]
-                        //     - startAddressEachSection[section_name];
-
-                        std::string section_name = relocationTablesNames[inputFiles[i]][j-1];
-                        filesRelocationTables[inputFiles[i]][j][z].offset += fileSectionStartAddresses[inputFiles[i]][section_name]
-                            - startAddressEachSection[section_name];
-                    }
+                    filesRelocationTables[inputFiles[i]][j][z].offset += fileSectionStartAddresses[inputFiles[i]][section_name]
+                                        - startAddressEachSection[section_name];
                 }
             }
         }
     }
 
-    //updating unifiedSymbolTable SCTNs if -relocatable argument isn't used (now sections value will have its addresses, not 0 anymore)
     if(isRelocatable == false){
-        for (const auto& entry : unifiedSymbolTable) {
+        //updating unifiedSymbolTable SCTNs (now sections value will have its addresses, not 0 anymore)
+        for (auto& entry : unifiedSymbolTable) {
             if(entry.second.type == "SCTN"){
-                auto it = unifiedSymbolTable.find(entry.second.name);
-                if (it != unifiedSymbolTable.end()) { // If the symbol exists, update its value
-                    it->second.value = startAddressEachSection[entry.second.name];
+                // auto it = unifiedSymbolTable.find(entry.second.name);
+                // if (it != unifiedSymbolTable.end()) { // If the symbol exists, update its value
+                //     it->second.value = startAddressEachSection[entry.second.name];
+                // }
+                entry.second.value = startAddressEachSection[entry.second.name];
+            }
+        }
+        // updating values of symbols (adding SCTN values), because when file is not relocatable SCTN values aren't 0
+        for (auto& entry : unifiedSymbolTable) {
+            if(entry.second.type != "SCTN" && entry.second.section_index != 0){
+                for(auto& entry2 : unifiedSymbolTable){
+                    if(entry2.second.type == "SCTN" && entry2.second.section_index == entry.second.section_index){
+                        entry.second.value += entry2.second.value;
+                        break;
+                    }
                 }
             }
         }
@@ -451,13 +439,13 @@ void resolveRelocationTables(std::vector<std::string> inputFiles){
                 memoryMap[relocationTablesNames[inputFiles[i]][j-1]].data[entry.offset + 1] = (finalValue >> 8) & 0xFF;
                 memoryMap[relocationTablesNames[inputFiles[i]][j-1]].data[entry.offset + 2] = (finalValue >> 16) & 0xFF;
                 memoryMap[relocationTablesNames[inputFiles[i]][j-1]].data[entry.offset + 3] = (finalValue >> 24) & 0xFF;
-                //memoryMap[relocationTablesNames[inputFiles[i]][j-1]].data[entry.offset] = value + entry.addend;
             }
         }
     }
 }
 
 void mergeSymbolTables(const std::vector<std::string>& inputFiles) {
+    int SECTION_INDEX = 1;
     std::map<std::string, int> sectionSizeAdjustments;
 
     for (const auto& file : inputFiles) {
@@ -465,11 +453,12 @@ void mergeSymbolTables(const std::vector<std::string>& inputFiles) {
 
         for (const auto& entry : symbolTable) {
             if (entry.type == "SCTN") {
-                unifiedSymbolTable.emplace(entry.name, entry);
-            } else { // Adjust the value based on section size adjustments
+                unifiedSymbolTable.emplace(entry.name, SymbolTableEntry(entry.value, entry.type, entry.bind, SECTION_INDEX++, entry.name, entry.defined));
+            } 
+            else { // Adjust the value based on section size adjustments
                 int adjustedValue = entry.value;
                 
-                std::string section_name; 
+                std::string section_name;
                 for(const auto& entry2 : symbolTable){ // find the name of the section in which symbol is
                     if(entry2.type == "SCTN" && entry2.section_index == entry.section_index){
                         section_name = entry2.name;
@@ -483,23 +472,42 @@ void mergeSymbolTables(const std::vector<std::string>& inputFiles) {
                 // Create a new symbol table entry with the adjusted value
                 SymbolTableEntry adjustedEntry = entry;
                 adjustedEntry.value = adjustedValue;
+
+                // check if there are multiple GLOB symbols with same name
                 auto it = unifiedSymbolTable.find(adjustedEntry.name);
                 if (it != unifiedSymbolTable.end() && adjustedEntry.bind == "GLOB" && it->second.bind == "GLOB" && 
                         (it->second.section_index != 0 && adjustedEntry.section_index != 0)){
                     std::cout<<"ERROR: Multiple global symbol definitions, symbol name: "<<adjustedEntry.name<<std::endl;
                     exit(-1); //ERROR
                 }
-                // Add the adjusted entry, if entry with that name already exists it does nothing
+                // Add the adjusted entry, emplace works like this: if entry with that name already exists it does nothing
                 unifiedSymbolTable.emplace(adjustedEntry.name, adjustedEntry);
 
                 // value adjusting for extern symbols
                 for(const auto& sym: unifiedSymbolTable){
                     if(sym.second.name == adjustedEntry.name){
                         auto it = unifiedSymbolTable.find(sym.second.name);
-                        if (it != unifiedSymbolTable.end() && sym.second.value == 0 && sym.second.name != "") {
+                        if (adjustedEntry.section_index != 0 && it != unifiedSymbolTable.end() && sym.second.section_index == 0 && sym.second.name != "") {
                             unifiedSymbolTable.erase(it); // Erase the existing entry
                         }
                         unifiedSymbolTable.emplace(sym.second.name, adjustedEntry); // Insert the new entry
+                        break;
+                    }
+                }
+            }
+        }
+        // update section indexes, to point to section numbers inside unified symbol table
+        for (const auto& entry : symbolTable) {
+            if(entry.type != "SCTN"){
+                std::string section_name = findSection(file, entry.section_index);
+                for (auto& entry2 : unifiedSymbolTable){ // find index of that section inside unified sym table
+                    if(entry2.second.type == "SCTN" && entry2.second.name == section_name){
+                        for(auto& entry3: unifiedSymbolTable) { // find that symbol inside unified sym table and change its section index
+                            if(entry3.second.name == entry.name) {
+                                entry3.second.section_index = entry2.second.section_index;
+                                break;
+                            }
+                        }
                         break;
                     }
                 }
@@ -539,7 +547,7 @@ void writeMemoryToHexFile(std::string fileName) {
         return;
     }
 
-    std::map<int, uint8_t> addressToData; // key is address, value is data byte
+    std::map<uint, uint8_t> addressToData; // key is address, value is data byte
     for (const auto& pair : memoryMap) {
         const MemorySection& section = pair.second;
         int sectionEnd = section.address + section.data.size();
@@ -551,7 +559,7 @@ void writeMemoryToHexFile(std::string fileName) {
     // Write to the file in the desired format
     auto it = addressToData.begin();
     while (it != addressToData.end()) {
-        int address = it->first;
+        uint address = it->first;
         outFile << std::hex << std::setw(8) << std::setfill('0') << address << ": ";
 
         // Write up to 8 bytes per line, but only if addresses are consecutive
@@ -643,18 +651,23 @@ void printUnifiedSymbolTable() {
               << std::setw(10) << "Type"
               << std::setw(10) << "Bind"
               << std::setw(15) << "Section Index"
+              << std::setw(15) << "Defined"
               << std::endl;
     std::cout << std::string(65, '-') << std::endl;
 
     // Print each symbol entry
     for (const auto& entry : unifiedSymbolTable) {
+        uint val;
+        if(entry.second.type == "SCTN") val = static_cast<uint>(entry.second.value);
+        else val = entry.second.value;
         std::cout << std::left 
                   << std::setw(10) << entry.second.num
                   << std::setw(20) << entry.second.name
-                  << std::setw(10) << std::to_string(entry.second.value)  // Convert value to string
+                  << std::setw(10) << std::hex << val // Convert value to string
                   << std::setw(10) << entry.second.type
                   << std::setw(10) << entry.second.bind
                   << std::setw(15) << std::to_string(entry.second.section_index) // Convert section index to string
+                  << std::setw(15) << entry.second.defined
                   << std::endl;
     }
 }
@@ -665,17 +678,32 @@ void printSectionStartAddresses() {
         std::cout << "File: " << fileName << std::endl;
         for (const auto& sectionEntry : sections) {
             const std::string& sectionName = sectionEntry.first;
-            int address = sectionEntry.second;
+            uint address = sectionEntry.second;
             std::cout << "  Section: " << sectionName << ", Starting Address: 0x" << std::hex << address << std::dec << std::endl;
         }
     }
 }
+void printRelocationTablesNEW(const std::map<std::string, std::vector<RelocationEntry>>& relocationTables) {
+    for (const auto& section : relocationTables) {
+        std::cout << "\nSECTION: " << section.first << std::endl;
+        std::cout << std::setw(10) << "OFFSET" 
+                << std::setw(15) << "TYPE" << std::setw(20) << "SYMBOL" 
+                << std::setw(10) << "ADDEND" << std::endl;
+        std::cout << std::string(60, '-') << std::endl;
 
+        for (const auto& entry : section.second) {
+        std::cout << std::setw(10) << entry.offset
+                    << std::setw(15) << entry.type << std::setw(20) << entry.symbol
+                    << std::setw(10) << entry.addend << std::endl;
+        }
+    }
+}
 std::map<std::string, std::vector<RelocationEntry>> relocationTables; // key is section name, value is relocation table for that section
 void mergeRelocationTables(std::vector<std::string> inputFiles){
     for(int i = 0; i < inputFiles.size(); i++){ // iterating through input files
         for(int j = 1; j < filesRelocationTables[inputFiles[i]].size()+1; j++){ // iterating through relocation tables inside one file
             relocationTables[relocationTablesNames[inputFiles[i]][j-1]]; // this creates an entry even though that relocation table for that section is empty
+            //std::cout<<"file: "<<inputFiles[i]<<", rela name: "<<relocationTablesNames[inputFiles[i]][j-1]<<std::endl;
             for(int z = 0; z < filesRelocationTables[inputFiles[i]][j].size(); z++){ // iterating through entries inside relocation tables
                 relocationTables[relocationTablesNames[inputFiles[i]][j-1]].push_back(filesRelocationTables[inputFiles[i]][j][z]);
             }
@@ -778,6 +806,8 @@ void createSectionHeaders(char* elfFile) {
     shdr[i++].sh_entsize = 0;
 
     //inserting sections
+    std::vector<std::string> order; // keeps track what section are first inserted, it may happen that order of sections inside
+                                    // relocationTable isn't the same as the one that is in shstrtab.
     size_t offset1 = sizes["shstrtab"];
     int counter = 0;
     for(int j = 0; j < symbolTable.size(); j++){
@@ -788,6 +818,7 @@ void createSectionHeaders(char* elfFile) {
         shdr[i].sh_addr = 0;
         shdr[i].sh_offset = sizeof(Elf64_Ehdr) + sizes["headerSections"] + offset1;
         shdr[i].sh_size = memoryMap[symbolTable[j].name].data.size();
+        order.push_back(symbolTable[j].name);
         offset1 += shdr[i].sh_size; // adding size of added section to the offset
         shdr[i].sh_link = 0;
         shdr[i].sh_info = 0;
@@ -798,23 +829,24 @@ void createSectionHeaders(char* elfFile) {
     //inserting relocation sections
     size_t offset2 = 0;
     for(int j = 0; j < relocationTables.size(); j++){
-      shdr[i].sh_name = offsets_relocations[j];
-      shdr[i].sh_type = SHT_RELA;
-      shdr[i].sh_flags = 0;
-      shdr[i].sh_addr = 0;
-      shdr[i].sh_offset = sizeof(Elf64_Ehdr) + sizes["headerSections"] + offset1 + offset2;
-      std::string section_name; //have to find name of the section because map is <std::string, RelaEntry>
-      for(int z = 0; z < symbolTable.size(); z++){
-        if(symbolTable[z].type == "SCTN" && symbolTable[z].section_index == j+1){
-            section_name = symbolTable[z].name;
-        }
-      }
-      shdr[i].sh_size = relocationTables[section_name].size() * sizeof(Elf64_Rela); // Size of relocation table
-      offset2 += shdr[i].sh_size;
-      shdr[i].sh_link = i + relocationTables.size() - j; //connection with symbol table
-      shdr[i].sh_info = i - relocationTables.size();
-      shdr[i].sh_addralign = 8;
-      shdr[i++].sh_entsize = sizeof(Elf64_Rela);
+        shdr[i].sh_name = offsets_relocations[j];
+        shdr[i].sh_type = SHT_RELA;
+        shdr[i].sh_flags = 0;
+        shdr[i].sh_addr = 0;
+        shdr[i].sh_offset = sizeof(Elf64_Ehdr) + sizes["headerSections"] + offset1 + offset2;
+        // std::string section_name; //have to find name of the section because map is <std::string, RelaEntry>
+        // for(int z = 0; z < symbolTable.size(); z++){
+        //     if(symbolTable[z].type == "SCTN" && symbolTable[z].section_index == j+1){
+        //         section_name = symbolTable[z].name;
+        //     }
+        // }
+        // shdr[i].sh_size = relocationTables[section_name].size() * sizeof(Elf64_Rela); // Size of relocation table
+        shdr[i].sh_size = relocationTables[order[j]].size() * sizeof(Elf64_Rela); // Size of relocation table
+        offset2 += shdr[i].sh_size;
+        shdr[i].sh_link = i + relocationTables.size() - j; //connection with symbol table
+        shdr[i].sh_info = i - relocationTables.size();
+        shdr[i].sh_addralign = 8;
+        shdr[i++].sh_entsize = sizeof(Elf64_Rela);
     }
     
     // Section Header for .symtab
@@ -840,7 +872,7 @@ void createSectionHeaders(char* elfFile) {
     shdr[i].sh_info = 0;
     shdr[i].sh_addralign = 0;
     shdr[i++].sh_entsize = 0;
-
+    
     memcpy(elfFile + sizeof(Elf64_Ehdr), shdr, sizeof(shdr));
     memcpy(elfFile + sizeof(Elf64_Ehdr) + sizes["headerSections"], shstrtab.c_str(), shstrtab.size());
     memcpy(elfFile + sizeof(Elf64_Ehdr) + sizes["headerSections"] + sizes["sectionData"] + sizes["shstrtab"] 
@@ -911,7 +943,7 @@ void serializeSymbolTable(char* elfFile, std::vector<int> strtab_offsets) {
     }
 }
 
-extern "C" void createELF(std::vector<std::string> inputFiles) {
+extern "C" void createELF(std::vector<std::string> inputFiles, std::string outputFile) {
     sizes["symbolTable"] = symbolTable.size() * sizeof(Elf64_Sym);
     sizes["headerSections"] = (4 + 2 * relocationTables.size()) * sizeof(Elf64_Shdr);
 
@@ -961,13 +993,18 @@ extern "C" void createELF(std::vector<std::string> inputFiles) {
     memset(elfFile, 0, fileSize);
 
     createElfHeader(elfFile);
+    std::cout<<"createElfHeader"<<std::endl;
     createSectionHeaders(elfFile);
+    std::cout<<"createSectionHeaders"<<std::endl;
     serializeSectionData(elfFile);
+    std::cout<<"serializeSectionData"<<std::endl;
     serializeRelocationTable(elfFile);
+    std::cout<<"serializeRelocationTable"<<std::endl;
     serializeSymbolTable(elfFile, strtab_offsets);
+    std::cout<<"serializeSymbolTable"<<std::endl;
 
     // Write to file
-    FILE* file = fopen("linkerELF.o", "wb");
+    FILE* file = fopen(outputFile.c_str(), "wb");
     if (file) {
         fwrite(elfFile, 1, fileSize, file);
         fclose(file);
@@ -1032,15 +1069,16 @@ int main(int argc, char* argv[]) {
     //     printRelocationTables(filesRelocationTables[options.inputFiles[i]]);
     // }
     
-    printMemoryBySections();
-    printSectionStartAddresses();
+    //printMemoryBySections();
+    //printSectionStartAddresses();
 
     //printUnifiedSymbolTable();
 
     if(options.isRelocatable == true){
         mergeRelocationTables(options.inputFiles);
+        //printRelocationTablesNEW(relocationTables);
         mapToVectorSymTab(); //changing unified symbol table from std::map to std::vector for easier work while creating ELF
-        createELF(options.inputFiles);
+        createELF(options.inputFiles, options.outputFile);
     }
     else if(options.isHex == true){
         resolveRelocationTables(options.inputFiles);

@@ -50,6 +50,7 @@ extern void processFlinkTable();
 //Elf function
 extern void createELF();
 extern void printMemoryMap();
+extern void setOutputFileName(char* outputFileName);
 %}
 
 %union {
@@ -196,12 +197,36 @@ void yyerror(const char *s) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s <input_file>\n", argv[0]);
+    if (argc < 4) {
+        fprintf(stderr, "command line arguments not specified");
         return 1;
     }
 
-    FILE *f = fopen(argv[1], "r");
+    char* outputFileName;
+    char* inputFileName;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-o") == 0) {
+            if (i + 1 < argc) {
+                outputFileName = argv[i + 1];
+                i++; // Skip the next argument as it's the output file name
+            } else {
+                fprintf(stderr, "Output file not specified after -o\n");
+                return 1;
+            }
+        } else {
+            inputFileName = argv[i];
+        }
+    }
+
+    if (outputFileName == NULL || inputFileName == NULL) {
+        fprintf(stderr, "Invalid command-line arguments\n");
+        return 1;
+    }
+
+    setOutputFileName(outputFileName);
+
+    FILE *f = fopen(inputFileName, "r");
     if (!f) {
         perror("Error opening file");
         return 1;
