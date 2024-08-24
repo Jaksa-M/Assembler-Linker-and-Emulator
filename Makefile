@@ -10,11 +10,11 @@ clean_build_run: clean assembler_
 #	./assembler pixon_test.s -o elfoutput1.o
 #	./assembler pixon_test2.s -o elfoutput2.o
 	./assembler -o main.o main.s
-	./assembler -o math.o math.s
+#	./assembler -o math.o math.s
 	./assembler -o handler.o handler.s
 	./assembler -o isr_timer.o isr_timer.s
 	./assembler -o isr_terminal.o isr_terminal.s
-	./assembler -o isr_software.o isr_software.s
+#	./assembler -o isr_software.o isr_software.s
 
 .PHONY: assembler_ clean clean_build_run
 
@@ -28,8 +28,14 @@ clean_linker:
 
 clean_build_run_linker: clean_linker linker_
 #	./linker -hex -o mem_content.hex -place=code2@0x4000F000 -place=code@0x40000000 elfoutput1.o elfoutput2.o
+
+# TEST A:
 #	./linker -relocatable -o program.o handler.o math.o main.o isr_terminal.o isr_timer.o isr_software.o
-	./linker -hex -place=my_code@0x40000000 -place=math@0xF0000000 -o program.hex handler.o math.o main.o isr_terminal.o isr_timer.o isr_software.o
+#	./linker -hex -place=my_code@0x40000000 -place=math@0xF0000000 -o program.hex handler.o math.o main.o isr_terminal.o isr_timer.o isr_software.o
+# TEST B:
+#	./linker -relocatable -o program.o main.o isr_terminal.o isr_timer.o handler.o
+	./linker -hex -place=my_code@0x40000000 -o program.hex main.o isr_terminal.o isr_timer.o handler.o
+
 
 emulator_:
 	gcc -g -o emulator emulator.cpp -lstdc++
@@ -40,3 +46,10 @@ clean_emulator:
 clean_build_run_emulator: clean_emulator emulator_
 #	./emulator mem_content.hex
 	./emulator program.hex
+
+
+full_clean: clean clean_linker clean_emulator
+
+test_prepare: assembler_ linker_ emulator_
+
+# popravljanje start.sh: chmod +x start.sh

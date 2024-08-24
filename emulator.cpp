@@ -4,11 +4,16 @@
 #include <iomanip>
 #include <map>
 #include <string>
+#include <termios.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#define FILE_STDIN 0 // This is the file descriptor for standard input
 
 class RegisterFile {
 private:
     std::array<uint32_t, 16> gprx; // General-purpose registers (0-15)
-    std::array<uint32_t, 3> csrx;  // Control/Status registers (0-2)
+    std::array<uint32_t, 3> csrx;  // Control/Status registers (0-2), status = 0, handler = 1, cause = 2
 
 public:
     RegisterFile() {
@@ -107,10 +112,99 @@ std::map<uint, uint8_t> readMemoryHexFile(const std::string& filename) {
     return memoryMap;
 }
 
+//-----------------------------------------------------------------------------------
+//TERMINAL
+void terminal_emulation(RegisterFile* regFile){
+    uint32_t TERM_OUT = 0xFFFFFF00;
+    uint32_t TERM_IN = 0xFFFFFF04;
+
+    auto it = memoryMap.find(TERM_OUT);
+    if(it != memoryMap.end()){
+        uint8_t character = memoryMap[TERM_OUT];
+        std::cout << static_cast<char>(character);
+        std::cout.flush();
+        memoryMap.erase(TERM_OUT);
+    }
+
+    if(!(regFile->getCSRX(0) & 0x02) && !(regFile->getCSRX(0) && 0x04)) {
+        char input;
+        if(read(FILE_STDIN, &input, 1) > 0) {
+            //std::cout<<"------------------------ISPISAN KARAKTER:------------------- "<<static_cast<int>(input)<<std::endl;
+            memoryMap[TERM_IN] = static_cast<uint8_t>(input);
+
+            // push status
+            uint32_t val = regFile->getCSRX(0); //status
+            uint32_t byte1 = (val >> 24) & 0xFF; // highest byte
+            uint32_t byte2 = (val >> 16) & 0xFF;
+            uint32_t byte3 = (val >> 8) & 0xFF;
+            uint32_t byte4 = val & 0xFF;
+            regFile->setGPRX(14, regFile->getGPRX(14) - 4); //sp = sp - 4
+            memoryMap[regFile->getGPRX(14) + 3] = byte1;
+            memoryMap[regFile->getGPRX(14) + 2] = byte2;
+            memoryMap[regFile->getGPRX(14) + 1] = byte3;
+            memoryMap[regFile->getGPRX(14)] = byte4;
+
+            // push pc
+            val = regFile->getGPRX(15); // pc
+            byte1 = (val >> 24) & 0xFF; // highest byte
+            byte2 = (val >> 16) & 0xFF;
+            byte3 = (val >> 8) & 0xFF;
+            byte4 = val & 0xFF;
+            regFile->setGPRX(14, regFile->getGPRX(14) - 4); //sp = sp - 4
+            memoryMap[regFile->getGPRX(14) + 3] = byte1;
+            memoryMap[regFile->getGPRX(14) + 2] = byte2;
+            memoryMap[regFile->getGPRX(14) + 1] = byte3;
+            memoryMap[regFile->getGPRX(14)] = byte4;
+
+            regFile->setCSRX(2, 3); // cause = 3;
+            regFile->setCSRX(0, regFile->getCSRX(0) | 0x02); // status |= 0x02
+            regFile->setGPRX(15, regFile->getCSRX(1)); // pc = handler
+        }
+    }
+}
+
+// Raw mode means that the terminal input is unbuffered, and input characters are made available immediately
+// without waiting for enter to be pressed, and without echoing them back to the terminal.
+void configureRawMode(bool activate) {
+    static struct termios previousSettings, currentSettings;
+    
+    if (activate == true) { //activate Raw mode
+        if (tcgetattr(FILE_STDIN, &previousSettings) == 0) { //check if tcgetattr call was successful
+            // tcgetattr gets the current terminal attributes and stores them in previousSettings
+            currentSettings = previousSettings;
+            currentSettings.c_lflag &= ~(ICANON | ECHO); // disabling canonical mode(for need to press enter) and echo
+            tcsetattr(FILE_STDIN, TCSANOW, &currentSettings); // applies the modified settings immediately (TCSANOW)
+        }
+    }
+    else {
+        tcsetattr(FILE_STDIN, TCSANOW, &previousSettings);
+    }
+}
+
+// When non-blocking mode is enabled, the function will not wait for data to be available. 
+// If no data is ready to be read, the function returns immediately with an indication that no data is available.
+void configureNonBlocking(bool state) {
+    int currentFlags = fcntl(FILE_STDIN, F_GETFL); // These flags indicate how the file behaves when being read from or written to
+    
+    if (currentFlags != -1) {
+        if (state == true) {
+            fcntl(FILE_STDIN, F_SETFL, currentFlags | O_NONBLOCK);
+        } else {
+            fcntl(FILE_STDIN, F_SETFL, currentFlags & (~O_NONBLOCK));
+        }
+    }
+}
+
+//------------------------------------------------------------------------------------------
 void executeInstructions(RegisterFile* regFile){
+    //terminal setting instructions
+    configureRawMode(true);
+    configureNonBlocking(true);
+
     regFile->setGPRX(15, 0x40000000); //setting the initial value of pc(r15)
     int counter = 0;
     while (true) {
+        terminal_emulation(regFile);
         size_t pc = regFile->getGPRX(15);
         uint8_t opcode1 = memoryMap[pc];
         uint8_t opcode2 = memoryMap[pc + 1];
@@ -222,7 +316,7 @@ void executeInstructions(RegisterFile* regFile){
                 }
                 break;
             case 0x03: // JMP
-                std::cout << "JMP ";
+                //std::cout << "JMP ";
                 temp = rA + D; // gpr[A] + D
 
                 // mem32[gpr[A] + D]
@@ -233,8 +327,8 @@ void executeInstructions(RegisterFile* regFile){
                 val |= static_cast<uint32_t>(memoryMap[temp + 3]) << 24; // byte4
                 switch(lower4Bits1){
                     case 0x00: // pc <= gpr[A] + D
-                        std::cout << "pc <= gpr[A] + D" << std::endl;
-                        std::cout<<"D: "<<std::hex<<D<<std::endl;
+                        //std::cout << "pc <= gpr[A] + D" << std::endl;
+                        //std::cout<<"D: "<<std::hex<<D<<std::endl;
                         regFile->setGPRX(15, temp);
                         break;
                     case 0x01: // if (gpr[B] == gpr[C]) pc <= gpr[A] + D
@@ -250,7 +344,7 @@ void executeInstructions(RegisterFile* regFile){
                         if (rB > rC) regFile->setGPRX(15, temp);
                         break;
                     case 0x08: // pc <= mem32[gpr[A] + D]
-                        std::cout << "pc <= mem32[gpr[A] + D]" << std::endl;
+                        std::cout << "pc <= mem32[gpr[A] + D] JMP SYMBOL" << std::endl;
                         regFile->setGPRX(15, val);
                         break;
                     case 0x09: // if (gpr[B] == gpr[C]) pc <= mem32[gpr[A] + D]
@@ -258,7 +352,7 @@ void executeInstructions(RegisterFile* regFile){
                         if (rB == rC) regFile->setGPRX(15, val);
                         break;
                     case 0x0a: // if (gpr[B] != gpr[C]) pc <= mem32[gpr[A] + D]
-                        std::cout << "if (gpr[B] != gpr[C]) pc <= mem32[gpr[A] + D]" << std::endl;
+                        //std::cout << "if (gpr[B] != gpr[C]) pc <= mem32[gpr[A] + D]" << std::endl;
                         if (rB != rC) regFile->setGPRX(15, val);
                         break;
                     case 0x0b: // if (gpr[B] signed> gpr[C]) pc <= mem32[gpr[A] + D]
@@ -336,8 +430,8 @@ void executeInstructions(RegisterFile* regFile){
                         memoryMap[val + 3] = (rC >> 24) & 0xFF; // Highest 8 bits
                         break;
                     case 0x02: // mem32[mem32[gpr[A] + gpr[B] + D]] <= gpr[C], ST
-                        std::cout<<"mem32[mem32[gpr[A] + gpr[B] + D]] <= gpr[C]" <<std::endl;
-                        std::cout<<"STORE";
+                        //std::cout<<"mem32[mem32[gpr[A] + gpr[B] + D]] <= gpr[C]" <<std::endl;
+                        //std::cout<<"STORE";
                         temp_mem = 0;
                         temp_mem |= memoryMap[val]; // Lowest 8 bits
                         temp_mem |= (memoryMap[val + 1] << 8);
@@ -351,7 +445,7 @@ void executeInstructions(RegisterFile* regFile){
                         std::cout<<", val: " <<std::hex<<val<<std::endl;
                         break;
                     case 0x01: // gpr[A] <= gpr[A] + D; mem32[gpr[A]] <= gpr[C]
-                        std::cout<<"gpr[A] <= gpr[A] + D; mem32[gpr[A]] <= gpr[C]" <<std::endl;
+                        std::cout<<"gpr[A] <= gpr[A] + D; mem32[gpr[A]] <= gpr[C] PUSH" <<std::endl;
                         regFile->setGPRX(upper4Bits2, rA + D);
                         rA1 = regFile->getGPRX(upper4Bits2);
                         memoryMap[rA1] = rC & 0xFF; // Lower 8 bits
@@ -364,15 +458,15 @@ void executeInstructions(RegisterFile* regFile){
             case 0x09:
                 switch(lower4Bits1){
                     case 0x00: // gpr[A] <= csr[B]
-                        std::cout<<"gpr[A] <= csr[B]" <<std::endl;
+                        //std::cout<<"gpr[A] <= csr[B]" <<std::endl;
                         regFile->setGPRX(upper4Bits2, regFile->getCSRX(lower4Bits2));
                         break;
                     case 0x01: // gpr[A] <= gpr[B] + D
-                        std::cout<<"gpr[A] <= gpr[B] + D" <<std::endl;
+                        //std::cout<<"gpr[A] <= gpr[B] + D" <<std::endl;
                         regFile->setGPRX(upper4Bits2, rB + D);
                         break;
                     case 0x02: // gpr[A] <= mem32[gpr[B] + gpr[C] + D]
-                        std::cout<<"gpr[A] <= mem32[gpr[B] + gpr[C] + D]" <<std::endl;
+                        //std::cout<<"gpr[A] <= mem32[gpr[B] + gpr[C] + D]" <<std::endl;
                         temp = rB + rC + D;
                         val = 0;
                         val |= static_cast<uint32_t>(memoryMap[temp]) << 0;   // byte1 (lowest byte)
@@ -382,7 +476,7 @@ void executeInstructions(RegisterFile* regFile){
                         regFile->setGPRX(upper4Bits2, val);
                         break;
                     case 0x03: // gpr[A] <= mem32[gpr[B]]; gpr[B] <= gpr[B] + D
-                        std::cout<<"gpr[A] <= mem32[gpr[B]]; gpr[B] <= gpr[B] + D" <<std::endl;
+                        //std::cout<<"gpr[A] <= mem32[gpr[B]]; gpr[B] <= gpr[B] + D  POP/RET" <<std::endl;
                         val = 0;
                         val |= static_cast<uint32_t>(memoryMap[rB]) << 0;   // byte1 (lowest byte)
                         val |= static_cast<uint32_t>(memoryMap[rB + 1]) << 8; // byte2
@@ -393,15 +487,15 @@ void executeInstructions(RegisterFile* regFile){
                         regFile->setGPRX(lower4Bits2, rB + D);
                         break;
                     case 0x04: // csr[A] <= gpr[B]
-                        std::cout<<"csr[A] <= gpr[B]" <<std::endl;
+                        //std::cout<<"csr[A] <= gpr[B]" <<std::endl;
                         regFile->setCSRX(upper4Bits2, rB);
                         break;
                     case 0x05: // csr[A] <= csr[B] | D
-                        std::cout<<"csr[A] <= csr[B] | D" <<std::endl;
+                        //std::cout<<"csr[A] <= csr[B] | D" <<std::endl;
                         regFile->setCSRX(upper4Bits2, regFile->getCSRX(lower4Bits2) | D);
                         break;
                     case 0x06: // csr[A] <= mem32[gpr[B] + gpr[C] + D]
-                        std::cout<<"csr[A] <= mem32[gpr[B] + gpr[C] + D]" <<std::endl;
+                        //std::cout<<"csr[A] <= mem32[gpr[B] + gpr[C] + D]" <<std::endl;
                         temp = rB + rC + D;
                         val = 0;
                         val |= static_cast<uint32_t>(memoryMap[temp]) << 0;   // byte1 (lowest byte)
@@ -411,7 +505,7 @@ void executeInstructions(RegisterFile* regFile){
                         regFile->setCSRX(upper4Bits2, val);
                         break;
                     case 0x07: // csr[A] <= mem32[gpr[B]]; gpr[B] <= gpr[B] + D
-                        std::cout<<"csr[A] <= mem32[gpr[B]]; gpr[B] <= gpr[B] + D" <<std::endl;
+                        //std::cout<<"csr[A] <= mem32[gpr[B]]; gpr[B] <= gpr[B] + D" <<std::endl;
                         val = 0;
                         val |= static_cast<uint32_t>(memoryMap[rB]) << 0;   // byte1 (lowest byte)
                         val |= static_cast<uint32_t>(memoryMap[rB + 1]) << 8; // byte2

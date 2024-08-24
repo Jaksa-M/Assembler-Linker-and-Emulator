@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iomanip>
 #include <elf.h>
+#include <algorithm>
 
 std::vector<std::string> symbol_list;
 
@@ -507,19 +508,30 @@ extern "C" void instruction_ld_st(char* instr, char* what_op, int gpr, int liter
     else if(strcmp(what_op, "literal") == 0){
       insert_to_memory(9,2,static_cast<uint8_t>(gpr),15,0,0,0,8); // gpr = mem[pc+8]
       insert_to_memory(9,2,static_cast<uint8_t>(gpr),static_cast<uint8_t>(gpr),0,0,0,0); // LD [gpr]
-      insert_to_memory(3,0,15,0,0,0,0,8); // JMP pc+8
+      insert_to_memory(3,0,15,0,0,0,0,4); // JMP pc+4
       splitAndInsertLiteralToMem(literal); // .neki literal na 32bita
     }
     else if(strcmp(what_op, "dollar_literal") == 0){
       insert_to_memory(9,2,static_cast<uint8_t>(gpr),15,0,0,0,4); // LD [pc+4]
       insert_to_memory(3,0,15,0,0,0,0,4); // JMP pc+4
+
+      //convert int to hex string
+      // std::stringstream ss;
+      // ss << std::hex << dollar_literal;
+      // std::string hexString = ss.str();
+      // // Convert the hexadecimal string back to an integer
+      // int hexValue;
+      // std::stringstream ss2;
+      // ss2 << std::hex << hexString;
+      // ss2 >> hexValue;
+      // dollar_literal = hexValue;
       splitAndInsertLiteralToMem(dollar_literal); // .neki literal na 32bita
     }
     else if(strcmp(what_op, "dollar_symbol") == 0){
       insert_to_memory(9,2,static_cast<uint8_t>(gpr),15,0,0,0,4); // gprx <= [pc+4]
       insert_to_memory(3,0,15,0,0,0,0,4); // JMP pc+4
-      if(isDefined(std::string(symbol)) == false){
-        addFlinkTableEntry(CURR_SECTION_INDEX, symbol, 0, sectionLocationCounter[CURR_SECTION_INDEX], '+', 0);
+      if(isDefined(std::string(dollar_symbol)) == false){
+        addFlinkTableEntry(CURR_SECTION_INDEX, dollar_symbol, 0, sectionLocationCounter[CURR_SECTION_INDEX], '+', 0);
       }
       else{
         addToRelocationTable(-1, -1, std::string(dollar_symbol), 0);
@@ -554,7 +566,7 @@ extern "C" void instruction_ld_st(char* instr, char* what_op, int gpr, int liter
       splitAndInsertLiteralToMem(0); // .neki symbol na 32bita, dodeljene sve 0le posto ne znamo vrednost simbola
     }
     else if(strcmp(what_op, "literal") == 0){
-      insert_to_memory(8,2,15,0,static_cast<uint8_t>(gpr),0,0,8); // mem[mem[pc+4]] = gprx
+      insert_to_memory(8,2,15,0,static_cast<uint8_t>(gpr),0,0,4); // mem[mem[pc+4]] = gprx
       insert_to_memory(3,0,15,0,0,0,0,4); // JMP pc+4
       splitAndInsertLiteralToMem(literal); // .neki literal na 32bita
     }
@@ -587,7 +599,7 @@ extern "C" void directive_global(){
   for(int i = 0; i < symbol_list.size(); i++){
     SymbolTableEntry* entry = symbolExist(symbol_list[i]);
     if(entry == nullptr){
-      addSymbolToSymTable(0, "NOTYP", "GLOB", -1, symbol_list[i], "undefined"); //value and section_index will be inserted when lable with its name is found.
+      addSymbolToSymTable(0, "NOTYP", "GLOB", 0, symbol_list[i], "undefined"); //value and section_index will be inserted when lable with its name is found.
     }
     else{
       entry->bind = "GLOB"; //nisam siguran dal ovo ovako treba, pogledati jos sta se desava ako prvo bude labela pa tek kasnije naidje global
@@ -648,11 +660,25 @@ extern "C" void directive_skip(int literal){
 extern "C" void directive_ascii(const char* str){
   if (str == nullptr) return;
   std::string s = std::string(str);
-  for (size_t i = 0; i < s.length(); ++i) {
+  for (size_t i = 1; i < s.length()-1; i++) { //1 and length()-1 is to skip "
     memoryMap[CURR_SECTION_INDEX].push_back(static_cast<unsigned char>(s[i]));
   }
   sectionLocationCounter[CURR_SECTION_INDEX] += s.length();
 }
+
+// extern "C" void directive_ascii(const char* str) { //little endian version
+//     if (str == nullptr) return;
+//     std::string s = std::string(str);
+
+//     // Reverse the string to simulate little-endian storage
+//     std::reverse(s.begin(), s.end());
+
+//     for (size_t i = 0; i < s.length(); ++i) {
+//         memoryMap[CURR_SECTION_INDEX].push_back(static_cast<unsigned char>(s[i]));
+//     }
+//     sectionLocationCounter[CURR_SECTION_INDEX] += s.length();
+// }
+
 
 extern "C" void directive_equ(){
 

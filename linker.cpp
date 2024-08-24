@@ -355,13 +355,14 @@ void setFileSectionStartAddresses(std::vector<std::string> inputFiles, bool isRe
             fileSectionStartAddresses[inputFiles[i]][entry.first] = addressPlusSize[entry.first];
         }
     }
-
+    
     // changing the symbol offsets, addends and symbol numbers(changing to point to unifiedSymTab, won't be changed in this for loop) in relocation tables
     // note: additional offset is calculated by looking in which section does current relocation table belong
     //       additional addend for SCTNs is calculated by looking in which section does current symbol belong
     for(int i = 0; i < inputFiles.size(); i++){ // iterating through input files
         for(int j = 1; j < filesRelocationTables[inputFiles[i]].size()+1; j++){ // iterating through relocation tables inside one file
             for(int z = 0; z < filesRelocationTables[inputFiles[i]][j].size(); z++){ // iterating through entries inside relocation tables
+                //std::cout<<"filesRelocationTables[inputFiles[i]][j][z].symbol: "<<filesRelocationTables[inputFiles[i]][j][z].symbol<<std::endl;
                 if(symbolTables[inputFiles[i]][filesRelocationTables[inputFiles[i]][j][z].symbol].type == "SCTN"){
                     // std::string section_name = symbolTables[inputFiles[i]][filesRelocationTables[inputFiles[i]][j][z].symbol].name;
                     // filesRelocationTables[inputFiles[i]][j][z].offset += 
@@ -383,7 +384,7 @@ void setFileSectionStartAddresses(std::vector<std::string> inputFiles, bool isRe
             }
         }
     }
-
+    
     if(isRelocatable == false){
         //updating unifiedSymbolTable SCTNs (now sections value will have its addresses, not 0 anymore)
         for (auto& entry : unifiedSymbolTable) {
@@ -474,12 +475,12 @@ void mergeSymbolTables(const std::vector<std::string>& inputFiles) {
                 adjustedEntry.value = adjustedValue;
 
                 // check if there are multiple GLOB symbols with same name
-                auto it = unifiedSymbolTable.find(adjustedEntry.name);
-                if (it != unifiedSymbolTable.end() && adjustedEntry.bind == "GLOB" && it->second.bind == "GLOB" && 
-                        (it->second.section_index != 0 && adjustedEntry.section_index != 0)){
-                    std::cout<<"ERROR: Multiple global symbol definitions, symbol name: "<<adjustedEntry.name<<std::endl;
-                    exit(-1); //ERROR
-                }
+                // auto it = unifiedSymbolTable.find(adjustedEntry.name);
+                // if (it != unifiedSymbolTable.end() && adjustedEntry.bind == "GLOB" && it->second.bind == "GLOB" && 
+                //         (it->second.section_index != 0 && adjustedEntry.section_index != 0)){
+                //     std::cout<<"ERROR: Multiple global symbol definitions, symbol name: "<<adjustedEntry.name<<std::endl;
+                //     exit(-1); //ERROR
+                // }
                 // Add the adjusted entry, emplace works like this: if entry with that name already exists it does nothing
                 unifiedSymbolTable.emplace(adjustedEntry.name, adjustedEntry);
 
@@ -1061,7 +1062,7 @@ int main(int argc, char* argv[]) {
 
     mergeSymbolTables(options.inputFiles);
     setFileSectionStartAddresses(options.inputFiles, options.isRelocatable);
-
+    
     //printing symbol and relocation tables
     // for(int i = 0; i < options.inputFiles.size(); i++){
     //     std::cout<<"FILE: "<<options.inputFiles[i]<<std::endl;
@@ -1070,7 +1071,7 @@ int main(int argc, char* argv[]) {
     // }
     
     //printMemoryBySections();
-    //printSectionStartAddresses();
+    printSectionStartAddresses();
 
     //printUnifiedSymbolTable();
 
