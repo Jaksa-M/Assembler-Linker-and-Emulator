@@ -2,14 +2,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-// #include "definitions.h"
 
 extern FILE *yyin;
 extern int yylex();
-void yyerror(const char *s);
+void yyerror(const char* s);
 int yyparse(void);
 extern char *yytext;
 
+//list functions:
 extern void addToSymbolList(char* symbol);
 extern void printSymbolList();
 extern void clearSymbolList();
@@ -47,15 +47,16 @@ extern void printRelocationTables();
 //flink table functions:
 extern void processFlinkTable();
 
-//Elf function
+//Elf function:
 extern void createELF();
+
+//other functions:
 extern void printMemoryMap();
 extern void setOutputFileName(char* outputFileName);
 %}
 
 %union {
   int val1;
-  int val2;
   char* val_str;
   int reg_num;
 }
@@ -120,7 +121,7 @@ skip_declaration: SKIP LITERAL { printf("SKIP %d\n", $2); directive_skip($2);};
 
 ascii_declaration: ASCII STRING { printf("ASCII %s\n", $2); directive_ascii($2);};
 
-equ_declaration: EQU SYMBOL COMMA LITERAL { printf(".equ %d\n", $4); directive_equ();};
+equ_declaration: EQU SYMBOL COMMA LITERAL { printf(".equ %d\n", $4); directive_equ();}; // isn't yet finished. Its for part C of project that i haven't done
 
 label_definition: LABEL { printf("LABEL: %s\n", $1); process_label($1);};
 

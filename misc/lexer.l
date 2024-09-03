@@ -49,60 +49,7 @@ int hexStringToInt(const char* hexStr) { //parameter can be in hex format or dec
   }
   return result;
 }
-
-
-// Helper function to convert a string to an integer
-int convert_to_int(const char *str) {
-    int base = 10; // Default base is decimal
-    int offset = 1; // Offset for the negative sign, if present
-
-    if (str[0] == '-') {
-        offset = 2;
-        if (str[1] == '$' && (str[3] == 'x' || str[3] == 'X')) {
-            base = 16; // Hexadecimal base
-            offset = 4; // Offset to skip "-$0x"
-        } else if (str[1] == '$') {
-            offset = 2; // Offset to skip "-$"
-        }
-    } else if (str[0] == '$') {
-        offset = 1;
-        if (str[2] == 'x' || str[2] == 'X') {
-            base = 16; // Hexadecimal base
-            offset = 3; // Offset to skip "$0x"
-        }
-    } else if (str[1] == 'x' || str[1] == 'X') {
-        base = 16; // Hexadecimal base
-        offset = 2; // Offset to skip "0x"
-    }
-
-    return (int)strtol(str + offset, NULL, base);
-}
-
-// Helper function to convert an integer to a binary string
-int convert_to_binary(int value) {
-  int binary = 0;
-  int place = 1;
-  
-  // Handle negative values by working with absolute value
-  int abs_value = abs(value);
-
-  while (abs_value > 0) {
-      binary += (abs_value % 2) * place;
-      abs_value /= 2;
-      place *= 10;
-  }
-
-  // If the original value was negative, adjust the binary value
-  // if (value < 0) {
-  //     printf("BINARY: -%d\n", binary);
-  // } else {
-  //     printf("BINARY: %d\n", binary);
-  // }
-
-  return binary;
-}
 %}
-
 %option outfile="lexer.c" header-file="lexer.h"
 %option noyywrap
 
@@ -152,8 +99,8 @@ int convert_to_binary(int value) {
 \$[0-9]+                    { yylval.val1 = atoi(yytext + 1); return DOLLAR_LITERAL; }
 [A-Za-z_][A-Za-z0-9_]*:     { yylval.val_str = strdup(yytext); yylval.val_str[strlen(yylval.val_str) - 1] = '\0'; return LABEL; }
 [A-Za-z_][A-Za-z0-9_]*      { yylval.val_str = strdup(yytext); return SYMBOL; }
-0x[0-9a-fA-F]+              { yylval.val1 = hexStringToInt(yytext); return LITERAL; }
-[0-9]+                      { yylval.val1 = atoi(yytext); return LITERAL; }
+0x[0-9a-fA-F]+              { yylval.val1 = hexStringToInt(yytext); return LITERAL; } // hex literal
+[0-9]+                      { yylval.val1 = atoi(yytext); return LITERAL; } // decimal literal
 
 "%"("r0"|"r1"|"r2"|"r3"|"r4"|"r5"|"r6"|"r7"|"r8"|"r9"|"r10"|"r11"|"r12"|"r13"|"r14"|"r15"|"sp"|"pc") {
   if (strcmp(yytext, "%sp") == 0) {yylval.reg_num = 14;} 
@@ -171,4 +118,3 @@ int convert_to_binary(int value) {
 "["                       { return LEFT_BRACKET; }
 "]"                       { return RIGHT_BRACKET; }
 %%
-

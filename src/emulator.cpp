@@ -49,16 +49,6 @@ public:
         csrx[index] = value;
     }
 
-    // void displayRegisters() const {
-    //     std::cout << "GPRX Registers:" << std::endl;
-    //     for (int i = 0; i < gprx.size(); i++) {
-    //         std::cout << "GPRX[" << i << "]: " << std::hex << gprx[i] << std::endl;
-    //     }
-    //     std::cout << "CSRX Registers:" << std::endl;
-    //     for (int i = 0; i < csrx.size(); i++) {
-    //         std::cout << "CSRX[" << i << "]: " << std::hex << csrx[i] << std::endl;
-    //     }
-    // }
     void displayRegisters() const {
         std::cout << "Emulated processor state:" << std::endl;
         for (int i = 0; i < gprx.size(); i++) {
@@ -129,7 +119,6 @@ void terminal_emulation(RegisterFile* regFile){
     if(!(regFile->getCSRX(0) & 0x02) && !(regFile->getCSRX(0) && 0x04)) {
         char input;
         if(read(FILE_STDIN, &input, 1) > 0) {
-            //std::cout<<"------------------------ISPISAN KARAKTER:------------------- "<<static_cast<int>(input)<<std::endl;
             memoryMap[TERM_IN] = static_cast<uint8_t>(input);
 
             // push status
@@ -210,10 +199,6 @@ void executeInstructions(RegisterFile* regFile){
         uint8_t opcode2 = memoryMap[pc + 1];
         uint8_t opcode3 = memoryMap[pc + 2];
         uint8_t opcode4 = memoryMap[pc + 3];
-        // std::cout<<"opcode1: "<<std::hex<<static_cast<int>(opcode1)<<std::endl;
-        // std::cout<<"opcode2: "<<std::hex<<static_cast<int>(opcode2)<<std::endl;
-        // std::cout<<"opcode3: "<<std::hex<<static_cast<int>(opcode3)<<std::endl;
-        // std::cout<<"opcode4: "<<std::hex<<static_cast<int>(opcode4)<<std::endl;
 
         uint8_t upper4Bits1 = (opcode4 >> 4) & 0x0F;
         uint8_t lower4Bits1 = opcode4 & 0x0F;
@@ -236,7 +221,7 @@ void executeInstructions(RegisterFile* regFile){
         D |= (lower4Bits3 & 0x0F) << 8; // Shift lower4Bits3 to the leftmost 4 bits
         D |= (upper4Bits4 & 0x0F) << 4; // Shift upper4Bits4 to the middle 4 bits
         D |= (lower4Bits4 & 0x0F);
-        if(D & 0x800) D |= 0xFFFFF000; // sign needs to be adjusted in order to recognized negative offsets correctly
+        if(D & 0x800) D |= 0xFFFFF000; // sign needs to be adjusted in order to recognize negative offsets correctly
 
         uint32_t temp = 0;
         uint32_t val = 0;
@@ -250,9 +235,10 @@ void executeInstructions(RegisterFile* regFile){
             case 0x00: // HALT
                 std::cout << "Emulated processor executed halt instruction" << std::endl;
                 regFile->displayRegisters();
+                configureRawMode(false);
+                configureNonBlocking(false);
                 return;
             case 0x01: // INT
-                std::cout << "INT" <<std::endl;
                 // push status
                 val = regFile->getCSRX(0); //status
                 byte1 = (val >> 24) & 0xFF; // highest byte
@@ -280,14 +266,13 @@ void executeInstructions(RegisterFile* regFile){
                 // cause <= 4
                 regFile->setCSRX(2, 4);
 
-                // status <= status & (~0x1)
-                regFile->setCSRX(0, regFile->getCSRX(0) & (~0x01));
+                // status <= status | 0x4, masking timer interrupt
+                regFile->setCSRX(0, regFile->getCSRX(0) | 0x4);
 
                 // pc <= handle
                 regFile->setGPRX(15, regFile->getCSRX(1));
                 break;
             case 0x02: // CALL
-                std::cout << "CALL" <<std::endl;
                 // push pc (both instructions have it)
                 val = regFile->getGPRX(15); //pc
                 byte1 = (val >> 24) & 0xFF;
@@ -299,6 +284,7 @@ void executeInstructions(RegisterFile* regFile){
                 memoryMap[regFile->getGPRX(14) + 2] = byte2;
                 memoryMap[regFile->getGPRX(14) + 1] = byte3;
                 memoryMap[regFile->getGPRX(14)] = byte4;
+
                 // gpr[A] + gpr[B] + D
                 val = rA + rB + D;
 
@@ -316,7 +302,6 @@ void executeInstructions(RegisterFile* regFile){
                 }
                 break;
             case 0x03: // JMP
-                //std::cout << "JMP ";
                 temp = rA + D; // gpr[A] + D
 
                 // mem32[gpr[A] + D]
@@ -327,42 +312,32 @@ void executeInstructions(RegisterFile* regFile){
                 val |= static_cast<uint32_t>(memoryMap[temp + 3]) << 24; // byte4
                 switch(lower4Bits1){
                     case 0x00: // pc <= gpr[A] + D
-                        //std::cout << "pc <= gpr[A] + D" << std::endl;
-                        //std::cout<<"D: "<<std::hex<<D<<std::endl;
                         regFile->setGPRX(15, temp);
                         break;
                     case 0x01: // if (gpr[B] == gpr[C]) pc <= gpr[A] + D
-                        std::cout << "if (gpr[B] == gpr[C]) pc <= gpr[A] + D" << std::endl;
                         if (rB == rC) regFile->setGPRX(15, temp);
                         break;
                     case 0x02: // if (gpr[B] != gpr[C]) pc <= gpr[A] + D
-                        std::cout << "if (gpr[B] != gpr[C]) pc <= gpr[A] + D" << std::endl;
                         if (rB != rC) regFile->setGPRX(15, temp);
                         break;
                     case 0x03: // if (gpr[B] signed> gpr[C]) pc <= gpr[A] + D
-                        std::cout << "if (gpr[B] signed> gpr[C]) pc <= gpr[A] + D" << std::endl;
                         if (rB > rC) regFile->setGPRX(15, temp);
                         break;
                     case 0x08: // pc <= mem32[gpr[A] + D]
-                        std::cout << "pc <= mem32[gpr[A] + D] JMP SYMBOL" << std::endl;
                         regFile->setGPRX(15, val);
                         break;
                     case 0x09: // if (gpr[B] == gpr[C]) pc <= mem32[gpr[A] + D]
-                        std::cout << "if (gpr[B] == gpr[C]) pc <= mem32[gpr[A] + D]" << std::endl;
                         if (rB == rC) regFile->setGPRX(15, val);
                         break;
                     case 0x0a: // if (gpr[B] != gpr[C]) pc <= mem32[gpr[A] + D]
-                        //std::cout << "if (gpr[B] != gpr[C]) pc <= mem32[gpr[A] + D]" << std::endl;
                         if (rB != rC) regFile->setGPRX(15, val);
                         break;
                     case 0x0b: // if (gpr[B] signed> gpr[C]) pc <= mem32[gpr[A] + D]
-                        std::cout << "if (gpr[B] signed> gpr[C]) pc <= mem32[gpr[A] + D]" << std::endl;
                         if (rB > rC) regFile->setGPRX(15, val);
                         break;
                 }
                 break;
             case 0x04: // XCHG
-                std::cout << "XCHG" <<std::endl;
                 temp = rB; // temp <= gpr[B];
                 regFile->setGPRX(lower4Bits2, rC); // gpr[B] <= gpr[C];
                 regFile->setGPRX(upper4Bits3, temp); // gpr[C] <= temp
@@ -370,19 +345,15 @@ void executeInstructions(RegisterFile* regFile){
             case 0x05:
                 switch(lower4Bits1){
                     case 0x00: // ADD, gpr[A] <= gpr[B] + gpr[C]
-                        std::cout << "ADD" <<std::endl;
                         regFile->setGPRX(upper4Bits2, rB + rC);
                         break;
                     case 0x01: // SUB, gpr[A] <= gpr[B] - gpr[C]
-                        std::cout << "SUB" <<std::endl;
                         regFile->setGPRX(upper4Bits2, rB - rC);
                         break;
                     case 0x02: // MUL, gpr[A] <= gpr[B] * gpr[C]
-                        std::cout << "MUL" <<std::endl;
                         regFile->setGPRX(upper4Bits2, rB * rC);
                         break;
                     case 0x03: // DIV, gpr[A] <= gpr[B] / gpr[C]
-                        std::cout << "DIV" <<std::endl;
                         regFile->setGPRX(upper4Bits2, rB / rC);
                         break;
                 }
@@ -390,19 +361,15 @@ void executeInstructions(RegisterFile* regFile){
             case 0x06:
                 switch(lower4Bits1){
                     case 0x00: // NOT,  gpr[A]<=~gpr[B]
-                        std::cout << "NOT" <<std::endl;
                         regFile->setGPRX(upper4Bits2, ~rB);
                         break;
                     case 0x01: // AND, gpr[A]<=gpr[B] & gpr[C]
-                        std::cout << "AND" <<std::endl;
                         regFile->setGPRX(upper4Bits2, rB & rC);
                         break;
                     case 0x02: // OR, gpr[A]<=gpr[B] | gpr[C]
-                        std::cout << "OR" <<std::endl;
                         regFile->setGPRX(upper4Bits2, rB | rC);
                         break;
                     case 0x03: // XOR, gpr[A]<=gpr[B] ^ gpr[C]
-                        std::cout << "XOR" <<std::endl;
                         regFile->setGPRX(upper4Bits2, rB ^ rC);
                         break;
                 }
@@ -410,11 +377,9 @@ void executeInstructions(RegisterFile* regFile){
             case 0x07:
                 switch(lower4Bits1){
                     case 0x00: // SHL, gpr[A] <= gpr[B] << gpr[C]
-                        std::cout << "SHL" <<std::endl;
                         regFile->setGPRX(upper4Bits2, rB << rC);
                         break;
                     case 0x01: // SHR, gpr[A] <= gpr[B] >> gpr[C]
-                        std::cout << "SHR" <<std::endl;
                         regFile->setGPRX(upper4Bits2, rB >> rC);
                         break;
                 }
@@ -423,15 +388,12 @@ void executeInstructions(RegisterFile* regFile){
                 val = rA + rB + D; // gpr[A] + gpr[B] + D
                 switch(lower4Bits1){ // order is 2, than 1 in project file so i did the same
                     case 0x00: // mem32[gpr[A] + gpr[B] + D] <= gpr[C]
-                        std::cout<<"mem32[gpr[A] + gpr[B] + D] <= gpr[C]" <<std::endl;
                         memoryMap[val] = rC & 0xFF; // Lower 8 bits
                         memoryMap[val + 1] = (rC >> 8) & 0xFF;  // Next 8 bits
                         memoryMap[val + 2] = (rC >> 16) & 0xFF; // Next 8 bits
                         memoryMap[val + 3] = (rC >> 24) & 0xFF; // Highest 8 bits
                         break;
                     case 0x02: // mem32[mem32[gpr[A] + gpr[B] + D]] <= gpr[C], ST
-                        //std::cout<<"mem32[mem32[gpr[A] + gpr[B] + D]] <= gpr[C]" <<std::endl;
-                        //std::cout<<"STORE";
                         temp_mem = 0;
                         temp_mem |= memoryMap[val]; // Lowest 8 bits
                         temp_mem |= (memoryMap[val + 1] << 8);
@@ -442,10 +404,8 @@ void executeInstructions(RegisterFile* regFile){
                         memoryMap[temp_mem + 1] = (rC >> 8) & 0xFF;
                         memoryMap[temp_mem + 2] = (rC >> 16) & 0xFF;
                         memoryMap[temp_mem + 3] = (rC >> 24) & 0xFF;
-                        std::cout<<", val: " <<std::hex<<val<<std::endl;
                         break;
                     case 0x01: // gpr[A] <= gpr[A] + D; mem32[gpr[A]] <= gpr[C]
-                        std::cout<<"gpr[A] <= gpr[A] + D; mem32[gpr[A]] <= gpr[C] PUSH" <<std::endl;
                         regFile->setGPRX(upper4Bits2, rA + D);
                         rA1 = regFile->getGPRX(upper4Bits2);
                         memoryMap[rA1] = rC & 0xFF; // Lower 8 bits
@@ -462,11 +422,9 @@ void executeInstructions(RegisterFile* regFile){
                         regFile->setGPRX(upper4Bits2, regFile->getCSRX(lower4Bits2));
                         break;
                     case 0x01: // gpr[A] <= gpr[B] + D
-                        //std::cout<<"gpr[A] <= gpr[B] + D" <<std::endl;
                         regFile->setGPRX(upper4Bits2, rB + D);
                         break;
                     case 0x02: // gpr[A] <= mem32[gpr[B] + gpr[C] + D]
-                        //std::cout<<"gpr[A] <= mem32[gpr[B] + gpr[C] + D]" <<std::endl;
                         temp = rB + rC + D;
                         val = 0;
                         val |= static_cast<uint32_t>(memoryMap[temp]) << 0;   // byte1 (lowest byte)
@@ -476,26 +434,21 @@ void executeInstructions(RegisterFile* regFile){
                         regFile->setGPRX(upper4Bits2, val);
                         break;
                     case 0x03: // gpr[A] <= mem32[gpr[B]]; gpr[B] <= gpr[B] + D
-                        //std::cout<<"gpr[A] <= mem32[gpr[B]]; gpr[B] <= gpr[B] + D  POP/RET" <<std::endl;
                         val = 0;
                         val |= static_cast<uint32_t>(memoryMap[rB]) << 0;   // byte1 (lowest byte)
                         val |= static_cast<uint32_t>(memoryMap[rB + 1]) << 8; // byte2
                         val |= static_cast<uint32_t>(memoryMap[rB + 2]) << 16; // byte3
                         val |= static_cast<uint32_t>(memoryMap[rB + 3]) << 24; // byte4
-                        std::cout<<"VAL: "<<std::hex<<val<<std::endl;
                         regFile->setGPRX(upper4Bits2, val);
                         regFile->setGPRX(lower4Bits2, rB + D);
                         break;
                     case 0x04: // csr[A] <= gpr[B]
-                        //std::cout<<"csr[A] <= gpr[B]" <<std::endl;
                         regFile->setCSRX(upper4Bits2, rB);
                         break;
                     case 0x05: // csr[A] <= csr[B] | D
-                        //std::cout<<"csr[A] <= csr[B] | D" <<std::endl;
                         regFile->setCSRX(upper4Bits2, regFile->getCSRX(lower4Bits2) | D);
                         break;
                     case 0x06: // csr[A] <= mem32[gpr[B] + gpr[C] + D]
-                        //std::cout<<"csr[A] <= mem32[gpr[B] + gpr[C] + D]" <<std::endl;
                         temp = rB + rC + D;
                         val = 0;
                         val |= static_cast<uint32_t>(memoryMap[temp]) << 0;   // byte1 (lowest byte)
@@ -505,7 +458,6 @@ void executeInstructions(RegisterFile* regFile){
                         regFile->setCSRX(upper4Bits2, val);
                         break;
                     case 0x07: // csr[A] <= mem32[gpr[B]]; gpr[B] <= gpr[B] + D
-                        //std::cout<<"csr[A] <= mem32[gpr[B]]; gpr[B] <= gpr[B] + D" <<std::endl;
                         val = 0;
                         val |= static_cast<uint32_t>(memoryMap[rB]) << 0;   // byte1 (lowest byte)
                         val |= static_cast<uint32_t>(memoryMap[rB + 1]) << 8; // byte2

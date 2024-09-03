@@ -18,7 +18,7 @@ struct RelocationEntry {
   RelocationEntry(int off, int sym, int add)
     : offset(off), symbol(sym), addend(add) {}
 };
-std::map<std::string, std::map<int, std::vector<RelocationEntry>>> filesRelocationTables; // key is name of the input file
+std::map<std::string, std::map<int, std::vector<RelocationEntry>>> filesRelocationTables; // key is name of the input file, value key is section number
 std::map<std::string, std::vector<std::string>> relocationTablesNames; // key is file name, value is vector of section names for that file
 
 struct SymbolTableEntry {
@@ -29,7 +29,7 @@ struct SymbolTableEntry {
   std::string bind;
   int section_index;
   std::string name;
-  std::string defined; //used to check if value is valid or not, so decides to put it in flink table
+  std::string defined;
   SymbolTableEntry(int val, const std::string& typ, const std::string& bin, int sec_index, const std::string& nam, const std::string& def)
       : num(currentNum++), value(val), type(typ), bind(bin), section_index(sec_index), name(nam), defined(def) {}
 };
@@ -211,49 +211,9 @@ struct MemorySection {
 
 std::map<std::string, MemorySection> memoryMap; // key is section name
 std::map<std::string, std::map<std::string, uint>> fileSectionStartAddresses; // Map to store the starting address of each section for each input file
-// key is section name, value is its starting address (differs from the map above because this tracks only beggining addresses of each section)
+// key is section name, value is its starting address (differs from the map above because this tracks only beginning addresses of each section)
 std::map<std::string, uint> startAddressEachSection; 
-std::map<std::string, SymbolTableEntry> unifiedSymbolTable; // Unified symbol table
-
-// void addSectionToMemory(const std::string& name, const std::vector<uint8_t>& data, const LinkerOptions& options, std::string fileName) {
-//     int address = 0;
-//     if (memoryMap.find(name) != memoryMap.end()) { // If section already exists, append data
-//         auto& section = memoryMap[name];
-//         section.data.insert(section.data.end(), data.begin(), data.end());
-
-//         // Check if the updated section data extends beyond its original end
-//         int oldEndAddress = section.address + section.data.size() - data.size();
-//         if (section.address + section.data.size() > oldEndAddress) {
-//             std::vector<std::string> sectionsToUpdate;
-//             for (const auto& entry : memoryMap) {
-//                 if (entry.second.address >= oldEndAddress && entry.first != name) {
-//                     sectionsToUpdate.push_back(entry.first);
-//                 }
-//             }
-//             for (const auto& sectionName : sectionsToUpdate) {
-//                 auto& section = memoryMap[sectionName];
-//                 section.address += data.size(); //this may have to be changed, not + data.size(), maybe less???
-//             }
-//         }
-//     } else {
-//         // Check if the section has a placement specified via -place argument
-//         if (options.isRelocatable == false && options.sectionPlacements.find(name) != options.sectionPlacements.end()) {
-//             address = std::stoi(options.sectionPlacements.at(name), nullptr, 16); // Convert the placement address from string to int
-//             //std::cout<<"Section: "<<name<<", address: "<<std::hex<<address<<std::endl;
-//         } else {
-//             // If no placement is specified, place it at the end of memory
-//             if (memoryMap.empty()) {
-//                 address = 0x0000;
-//                 //address = 0x0100; // Start at 0x0100 if no sections are present (fix this)
-//             } else {
-//                 const auto& lastSection = memoryMap.rbegin()->second;
-//                 address = lastSection.address + lastSection.data.size();
-//             }
-//         }
-//         memoryMap[name] = {name, data, address}; // Insert the new section into memory
-//         std::cout<<"name: "<<name<<", address: "<<std::hex<<address<<std::endl;
-//     }
-// }
+std::map<std::string, SymbolTableEntry> unifiedSymbolTable; // Unified symbol table (that is merged symbol table)
 
 void addSectionToMemory(const std::string& name, const std::vector<uint8_t>& data, const LinkerOptions& options, std::string fileName) {
     uint address = 0;
@@ -308,7 +268,7 @@ void addSectionToMemory(const std::string& name, const std::vector<uint8_t>& dat
 }
 
 
-std::string findSection(std::string fileName, int section_index){
+std::string findSection(std::string fileName, int section_index){ //find section in symbol table for certain file
     for(int i = 0; i < symbolTables[fileName].size(); i++){
         if(symbolTables[fileName][i].type == "SCTN" && symbolTables[fileName][i].section_index == section_index){
             return symbolTables[fileName][i].name;
@@ -327,9 +287,7 @@ int findInUnifiedSymbolTable(std::string name){ //returns index of that row in u
 }
 
 void setFileSectionStartAddresses(std::vector<std::string> inputFiles, bool isRelocatable) {
-    std::map<std::string, int> occurrences; // key is section name, value is how many times that section occurred
     std::map<std::string, std::map<std::string, int>> sectionSizesFiles; // key is file name, value key is section name
-    std::map<std::string, std::map<std::string, int>> sectionAddressesFiles; // key is file name, value key is section name
     std::map<std::string, int> addressPlusSize;
     int cnt = 0;
     for(int i = 0; i < inputFiles.size(); i++){
@@ -362,11 +320,7 @@ void setFileSectionStartAddresses(std::vector<std::string> inputFiles, bool isRe
     for(int i = 0; i < inputFiles.size(); i++){ // iterating through input files
         for(int j = 1; j < filesRelocationTables[inputFiles[i]].size()+1; j++){ // iterating through relocation tables inside one file
             for(int z = 0; z < filesRelocationTables[inputFiles[i]][j].size(); z++){ // iterating through entries inside relocation tables
-                //std::cout<<"filesRelocationTables[inputFiles[i]][j][z].symbol: "<<filesRelocationTables[inputFiles[i]][j][z].symbol<<std::endl;
                 if(symbolTables[inputFiles[i]][filesRelocationTables[inputFiles[i]][j][z].symbol].type == "SCTN"){
-                    // std::string section_name = symbolTables[inputFiles[i]][filesRelocationTables[inputFiles[i]][j][z].symbol].name;
-                    // filesRelocationTables[inputFiles[i]][j][z].offset += 
-                    //     fileSectionStartAddresses[inputFiles[i]][section_name] - startAddressEachSection[section_name];
                     std::string section_name = relocationTablesNames[inputFiles[i]][j-1];
                     filesRelocationTables[inputFiles[i]][j][z].offset += 
                         fileSectionStartAddresses[inputFiles[i]][section_name] - startAddressEachSection[section_name];
@@ -389,10 +343,6 @@ void setFileSectionStartAddresses(std::vector<std::string> inputFiles, bool isRe
         //updating unifiedSymbolTable SCTNs (now sections value will have its addresses, not 0 anymore)
         for (auto& entry : unifiedSymbolTable) {
             if(entry.second.type == "SCTN"){
-                // auto it = unifiedSymbolTable.find(entry.second.name);
-                // if (it != unifiedSymbolTable.end()) { // If the symbol exists, update its value
-                //     it->second.value = startAddressEachSection[entry.second.name];
-                // }
                 entry.second.value = startAddressEachSection[entry.second.name];
             }
         }
@@ -456,7 +406,8 @@ void mergeSymbolTables(const std::vector<std::string>& inputFiles) {
             if (entry.type == "SCTN") {
                 unifiedSymbolTable.emplace(entry.name, SymbolTableEntry(entry.value, entry.type, entry.bind, SECTION_INDEX++, entry.name, entry.defined));
             } 
-            else { // Adjust the value based on section size adjustments
+            else if(entry.bind != "LOC" || (entry.bind == "LOC" && entry.name == "")){ // Adjust the value based on section size adjustments
+                // also skipping every LOCAL symbol, since they are not important anymore
                 int adjustedValue = entry.value;
                 
                 std::string section_name;
@@ -475,12 +426,12 @@ void mergeSymbolTables(const std::vector<std::string>& inputFiles) {
                 adjustedEntry.value = adjustedValue;
 
                 // check if there are multiple GLOB symbols with same name
-                // auto it = unifiedSymbolTable.find(adjustedEntry.name);
-                // if (it != unifiedSymbolTable.end() && adjustedEntry.bind == "GLOB" && it->second.bind == "GLOB" && 
-                //         (it->second.section_index != 0 && adjustedEntry.section_index != 0)){
-                //     std::cout<<"ERROR: Multiple global symbol definitions, symbol name: "<<adjustedEntry.name<<std::endl;
-                //     exit(-1); //ERROR
-                // }
+                auto it = unifiedSymbolTable.find(adjustedEntry.name);
+                if (it != unifiedSymbolTable.end() && adjustedEntry.bind == "GLOB" && it->second.bind == "GLOB" && 
+                        (it->second.section_index != 0 && adjustedEntry.section_index != 0)){
+                    std::cout<<"ERROR: Multiple global symbol definitions, symbol name: "<<adjustedEntry.name<<std::endl;
+                    exit(-1); //ERROR
+                }
                 // Add the adjusted entry, emplace works like this: if entry with that name already exists it does nothing
                 unifiedSymbolTable.emplace(adjustedEntry.name, adjustedEntry);
 
@@ -523,12 +474,11 @@ void mergeSymbolTables(const std::vector<std::string>& inputFiles) {
         }
     }
 
-    // remove every symbol with LOCAL binding
-    for (auto it = unifiedSymbolTable.begin(); it != unifiedSymbolTable.end(); ) {
-        if (it->second.bind == "LOC" && it->second.type != "SCTN" && it->second.name != "") {
-            it = unifiedSymbolTable.erase(it); // Erase and move to the next element
-        } else {
-            ++it; // Move to the next element
+    // check if there is any unresolved symbol left(thats error)
+    for (auto& entry: unifiedSymbolTable) {
+        if(entry.second.section_index == 0 && entry.second.name != ""){
+            std::cout<<"ERROR: Unresolved symbol: "<<entry.second.name<<std::endl;
+            exit(-4); //ERROR
         }
     }
 
@@ -835,13 +785,6 @@ void createSectionHeaders(char* elfFile) {
         shdr[i].sh_flags = 0;
         shdr[i].sh_addr = 0;
         shdr[i].sh_offset = sizeof(Elf64_Ehdr) + sizes["headerSections"] + offset1 + offset2;
-        // std::string section_name; //have to find name of the section because map is <std::string, RelaEntry>
-        // for(int z = 0; z < symbolTable.size(); z++){
-        //     if(symbolTable[z].type == "SCTN" && symbolTable[z].section_index == j+1){
-        //         section_name = symbolTable[z].name;
-        //     }
-        // }
-        // shdr[i].sh_size = relocationTables[section_name].size() * sizeof(Elf64_Rela); // Size of relocation table
         shdr[i].sh_size = relocationTables[order[j]].size() * sizeof(Elf64_Rela); // Size of relocation table
         offset2 += shdr[i].sh_size;
         shdr[i].sh_link = i + relocationTables.size() - j; //connection with symbol table
@@ -994,15 +937,10 @@ extern "C" void createELF(std::vector<std::string> inputFiles, std::string outpu
     memset(elfFile, 0, fileSize);
 
     createElfHeader(elfFile);
-    std::cout<<"createElfHeader"<<std::endl;
     createSectionHeaders(elfFile);
-    std::cout<<"createSectionHeaders"<<std::endl;
     serializeSectionData(elfFile);
-    std::cout<<"serializeSectionData"<<std::endl;
     serializeRelocationTable(elfFile);
-    std::cout<<"serializeRelocationTable"<<std::endl;
     serializeSymbolTable(elfFile, strtab_offsets);
-    std::cout<<"serializeSymbolTable"<<std::endl;
 
     // Write to file
     FILE* file = fopen(outputFile.c_str(), "wb");
@@ -1016,16 +954,6 @@ extern "C" void createELF(std::vector<std::string> inputFiles, std::string outpu
 
 int main(int argc, char* argv[]) {
     LinkerOptions options = parseArguments(argc, argv);
-
-    // Now you can use the options structure to control the rest of your linker logic
-    // std::cout << "Output file: " << options.outputFile << "\n";
-    // for (const auto& placement : options.sectionPlacements) {
-    //     std::cout << "Place section " << placement.first << " at address " << placement.second << "\n";
-    // }
-    // std::cout << (options.isHex ? "Hex output enabled\n" : "Relocatable output enabled\n");
-    // for (const auto& inputFile : options.inputFiles) {
-    //     std::cout << "Input file: " << inputFile << "\n";
-    // }
 
     // Read the ELF file and populate the symbol table and relocation tables
     readELF(options.inputFiles);
@@ -1071,7 +999,7 @@ int main(int argc, char* argv[]) {
     // }
     
     //printMemoryBySections();
-    printSectionStartAddresses();
+    //printSectionStartAddresses();
 
     //printUnifiedSymbolTable();
 

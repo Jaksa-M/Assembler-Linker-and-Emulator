@@ -1,4 +1,3 @@
-//#include "definitions.h"
 #include <iostream>
 #include <vector>
 #include <map>
@@ -28,7 +27,6 @@ extern "C" void printSymbolList() {
 extern "C" void clearSymbolList() {
   symbol_list.clear();
 }
-
 
 enum WordType {
   SYMBOL_TYPE,
@@ -61,7 +59,7 @@ extern "C" void addLiteralToWordList(int literal) {
 }
 
 extern "C" void printWordList() {
-  for (size_t i = 0; i < word_list.size(); ++i) {
+  for (size_t i = 0; i < word_list.size(); i++) {
     if (word_list[i].type == SYMBOL_TYPE) {
       printf("%s", word_list[i].value.symbol);
     } else {
@@ -107,11 +105,11 @@ void addFlinkTableEntry(int section, const char* symbol, int symbol_value, int a
     }
   }
 
-  if (entry == nullptr) {
+  if (entry == nullptr) { //if entry doesn't already exists, create it
     FlinkTableEntry newEntry(symbol);
     newEntry.address_sign_addend.emplace_back(address, sign, addend);
     flinkTableMap[section].push_back(newEntry);
-  } else {
+  } else { // entry for that symobl exists, so just new address_sign_field for that symbol will be added
     entry->address_sign_addend.emplace_back(address, sign, addend); //emplace_back does the same as push_back but is more efficient.
   }
 }
@@ -165,7 +163,7 @@ struct SymbolTableEntry {
   std::string bind;
   int section_index;
   std::string name;
-  std::string defined; //used to check if value is valid or not, so decides to put it in flink table
+  std::string defined; //used to check if value is valid or not, so decides whether to put it in flink table
 
   SymbolTableEntry(int val, const std::string& typ, const std::string& bin, int sec_index, const std::string& nam, const std::string& def)
       : num(currentNum++), value(val), type(typ), bind(bin), section_index(sec_index), name(nam), defined(def) {}
@@ -232,15 +230,15 @@ int getSymbolNum(std::string symbol) {
 int formAddend(std::string symbol, int flink_addend, int offset){
   for(int i = 0; i < symbolTable.size(); i++){
     if(symbolTable[i].name == symbol){
-      if(symbolTable[i].bind == "LOC") {
-        return symbolTable[i].value; //+ flink_addend - offset;
+      if(symbolTable[i].bind == "LOC") { // addend for local symbols is its value
+        return symbolTable[i].value;
       }
-      else {
-        return 0;//flink_addend - offset;
+      else { // addend for global symbols is 0
+        return 0;
       }
     }
   }
-  return -1; //ERROR code (wont happen)
+  return -1; //ERROR code (won't happen)
 }
 
 bool isDefined(std::string symbol){ // if symbol exists in symbol table and is defined it will return true
@@ -274,7 +272,7 @@ void insert_to_memory(uint8_t addr1, uint8_t addr2, uint8_t addr3, uint8_t addr4
   uint8_t combined2 = (addr3 << 4) | (addr4 & 0x0F);
   uint8_t combined3 = (addr5 << 4) | (addr6 & 0x0F);
   uint8_t combined4 = (addr7 << 4) | (addr8 & 0x0F);
-  
+  // placing inside memory in little endian order
   memoryMap[CURR_SECTION_INDEX].push_back(combined4);
   memoryMap[CURR_SECTION_INDEX].push_back(combined3);
   memoryMap[CURR_SECTION_INDEX].push_back(combined2);
@@ -287,7 +285,7 @@ void splitAndInsertLiteralToMem(int literal) {
   uint8_t parts[8];
   
   // Split the integer into 8 parts of 4 bits each
-  for (int i = 0; i < 8; ++i) {
+  for (int i = 0; i < 8; i++) {
     parts[i] = (literal >> (28 - 4 * i)) & 0xF; // Extract 4 bits
   }
   insert_to_memory(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7]);
@@ -296,7 +294,7 @@ void splitAndInsertLiteralToMem(int literal) {
 //--------------------------------------------------------------------------------------------------
 struct RelocationEntry {
   int offset; // Offset within the section
-  std::string type = "R_X86_64_32S"; // Type of relocation
+  std::string type = "R_X86_64_32S"; // Type of relocation (i will be using only this type)
   int symbol; // Symbol index in symbol table
   int addend; // Addend value
 
@@ -376,10 +374,6 @@ extern "C" void instruction_halt_int_iret_ret(char* instr){
   } else if (strcmp(instr, "int") == 0) {
     insert_to_memory(1,0,0,0,0,0,0,0);
   } else if (strcmp(instr, "iret") == 0) {
-    //NE MOZE OVAKO JER KAD SE POPUJE PC, ONDA SE SAMO SKACE NA TU ADRESU A NE IZVRSAVA SE POP STATUS
-    //insert_to_memory(9,3,15,14,0,0,0,4); //pc <= mem32[sp]; sp <= sp + 4;
-    //insert_to_memory(9,7,0,14,0,0,0,4);  //status <= mem32[sp]; sp <= sp + 4;
-    //OVAKO TREBA
     insert_to_memory(9,1,14,14,0,0,0,8); // sp = sp + 8
     insert_to_memory(9,6,0,14,0,15,15,12); // status = mem32[sp-4]
     insert_to_memory(9,2,15,14,0,15,15,8); // pc = mem32[sp - 8]
@@ -514,17 +508,6 @@ extern "C" void instruction_ld_st(char* instr, char* what_op, int gpr, int liter
     else if(strcmp(what_op, "dollar_literal") == 0){
       insert_to_memory(9,2,static_cast<uint8_t>(gpr),15,0,0,0,4); // LD [pc+4]
       insert_to_memory(3,0,15,0,0,0,0,4); // JMP pc+4
-
-      //convert int to hex string
-      // std::stringstream ss;
-      // ss << std::hex << dollar_literal;
-      // std::string hexString = ss.str();
-      // // Convert the hexadecimal string back to an integer
-      // int hexValue;
-      // std::stringstream ss2;
-      // ss2 << std::hex << hexString;
-      // ss2 >> hexValue;
-      // dollar_literal = hexValue;
       splitAndInsertLiteralToMem(dollar_literal); // .neki literal na 32bita
     }
     else if(strcmp(what_op, "dollar_symbol") == 0){
@@ -545,13 +528,25 @@ extern "C" void instruction_ld_st(char* instr, char* what_op, int gpr, int liter
       insert_to_memory(9,2,static_cast<uint8_t>(gpr),static_cast<uint8_t>(reg),0,0,0,0); //gprx = mem[reg]
     }
     else if(strcmp(what_op, "mem_reg_literal") == 0){
-      if ((literal & 0xFFFFF000) != 0){} //ERROR
+      if ((literal & 0xFFFFF000) != 0){
+        std::cout<<"ERROR: Value of literal is bigger than 12bits"<<std::endl;
+        exit(-5); //ERROR
+      }
       insert_to_memory(9,2,static_cast<uint8_t>(gpr),static_cast<uint8_t>(reg),0,static_cast<uint8_t>((literal >> 8) & 0x0F),
         static_cast<uint8_t>((literal >> 4) & 0x0F),static_cast<uint8_t>(literal & 0x0F)); //gprx = mem[reg + literal]
     }
     else if(strcmp(what_op, "mem_reg_symbol") == 0){
-      if(isDefined(std::string(symbol)) == false){} //ERROR
-      insert_to_memory(9,2,static_cast<uint8_t>(gpr),static_cast<uint8_t>(reg),0,0,0,0); //gprx = mem[reg + symbol], symbol has value 0 right now...
+      SymbolTableEntry* sym = symbolExist(std::string(symbol));
+      if(isDefined(std::string(symbol)) == false){
+        std::cout<<"ERROR: Value of symbol is unknown"<<std::endl;
+        exit(-6); //ERROR
+      }
+      else if(sym->value > 0xFFF){
+        std::cout<<"ERROR: Symbol can't be written as signed 12 bit value"<<std::endl;
+        exit(-7); //ERROR
+      }
+      insert_to_memory(9,2,static_cast<uint8_t>(gpr),static_cast<uint8_t>(reg),0,static_cast<uint8_t>((sym->value >> 8) & 0x0F),
+        static_cast<uint8_t>((sym->value >> 4) & 0x0F),static_cast<uint8_t>(sym->value & 0x0F)); //gprx = mem[reg + symbol], symbol has value 0 right now...
     }
   } else if (strcmp(instr, "st") == 0) {
     if(strcmp(what_op, "symbol") == 0){
@@ -571,10 +566,12 @@ extern "C" void instruction_ld_st(char* instr, char* what_op, int gpr, int liter
       splitAndInsertLiteralToMem(literal); // .neki literal na 32bita
     }
     else if(strcmp(what_op, "dollar_literal") == 0){
-      //ERROR
+      std::cout<<"ERROR: Impossible operation code"<<std::endl;
+      exit(-8); //ERROR
     }
     else if(strcmp(what_op, "dollar_symbol") == 0){
-      //ERROR
+      std::cout<<"ERROR: Impossible operation code"<<std::endl;
+      exit(-9); //ERROR
     }
     else if(strcmp(what_op, "reg") == 0){
       insert_to_memory(9,1,static_cast<uint8_t>(reg),static_cast<uint8_t>(gpr),0,0,0,0);
@@ -583,13 +580,25 @@ extern "C" void instruction_ld_st(char* instr, char* what_op, int gpr, int liter
       insert_to_memory(8,0,static_cast<uint8_t>(reg),0,static_cast<uint8_t>(gpr),0,0,0); //mem[reg] = gprx
     }
     else if(strcmp(what_op, "mem_reg_literal") == 0){
-      if ((literal & 0xFFFFF000) != 0){} //ERROR
+      if ((literal & 0xFFFFF000) != 0){
+        std::cout<<"ERROR: Value of literal is bigger than 12bits"<<std::endl;
+        exit(-10); //ERROR
+      }
       insert_to_memory(8,0,static_cast<uint8_t>(reg),0,static_cast<uint8_t>(gpr),static_cast<uint8_t>((literal >> 8) & 0x0F),
                         static_cast<uint8_t>((literal >> 4) & 0x0F),static_cast<uint8_t>(literal & 0x0F)); //mem[reg + literal] = gprx
     }
     else if(strcmp(what_op, "mem_reg_symbol") == 0){
-      if(isDefined(std::string(symbol)) == false){} //ERROR
-      insert_to_memory(8,0,static_cast<uint8_t>(reg),0,static_cast<uint8_t>(gpr),0,0,0); //mem[reg + symbol] = gprx
+      SymbolTableEntry* sym = symbolExist(std::string(symbol));
+      if(isDefined(std::string(symbol)) == false){
+        std::cout<<"ERROR: Value of symbol is unknown"<<std::endl;
+        exit(-6); //ERROR
+      }
+      else if(sym->value > 0xFFF){
+        std::cout<<"ERROR: Symbol can't be written as signed 12 bit value"<<std::endl;
+        exit(-7); //ERROR
+      }
+      insert_to_memory(8,0,static_cast<uint8_t>(reg),0,static_cast<uint8_t>(gpr),static_cast<uint8_t>((sym->value >> 8) & 0x0F),
+        static_cast<uint8_t>((sym->value >> 4) & 0x0F),static_cast<uint8_t>(sym->value & 0x0F)); //mem[reg + symbol] = gprx
     }
   }
 }
@@ -599,7 +608,7 @@ extern "C" void directive_global(){
   for(int i = 0; i < symbol_list.size(); i++){
     SymbolTableEntry* entry = symbolExist(symbol_list[i]);
     if(entry == nullptr){
-      addSymbolToSymTable(0, "NOTYP", "GLOB", 0, symbol_list[i], "undefined"); //value and section_index will be inserted when lable with its name is found.
+      addSymbolToSymTable(0, "NOTYP", "GLOB", 0, symbol_list[i], "undefined"); //value and section_index will be inserted when label with its name is found.
     }
     else{
       entry->bind = "GLOB"; //nisam siguran dal ovo ovako treba, pogledati jos sta se desava ako prvo bude labela pa tek kasnije naidje global
@@ -627,7 +636,7 @@ extern "C" void directive_section(char* name){
     sectionLocationCounter[CURR_SECTION_INDEX] = 0; // Initialize the location counter for the new section
     relocationTables[CURR_SECTION_INDEX];
   }
-  else{
+  else{ //section with same name appeared for the second time in same file
     CURR_SECTION_INDEX = entry->section_index;
   }
 }
@@ -666,23 +675,7 @@ extern "C" void directive_ascii(const char* str){
   sectionLocationCounter[CURR_SECTION_INDEX] += s.length();
 }
 
-// extern "C" void directive_ascii(const char* str) { //little endian version
-//     if (str == nullptr) return;
-//     std::string s = std::string(str);
-
-//     // Reverse the string to simulate little-endian storage
-//     std::reverse(s.begin(), s.end());
-
-//     for (size_t i = 0; i < s.length(); ++i) {
-//         memoryMap[CURR_SECTION_INDEX].push_back(static_cast<unsigned char>(s[i]));
-//     }
-//     sectionLocationCounter[CURR_SECTION_INDEX] += s.length();
-// }
-
-
-extern "C" void directive_equ(){
-
-}
+extern "C" void directive_equ(){} // not implemented in my project
 
 extern "C" void process_label(char* label){
   SymbolTableEntry* entry = symbolExist(std::string(label));
@@ -889,13 +882,13 @@ void createSectionHeaders(char* elfFile) {
 int getBind(SymbolTableEntry entry){
   if(entry.bind == "LOC") return STB_LOCAL;
   else if(entry.bind == "GLOB") return STB_GLOBAL;
-  return -1; //ERROR
+  return -1; //ERROR (won't happen)
 }
 
 int getType(SymbolTableEntry entry){
   if(entry.type == "NOTYP") return STT_NOTYPE;
   else if(entry.type == "SCTN") return STT_SECTION; 
-  return -1; //ERROR
+  return -1; //ERROR (won't happen)
 }
 
 void serializeSectionData(char* elfFile){
